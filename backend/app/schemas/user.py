@@ -7,6 +7,7 @@ class UserOut(BaseModel):
     role: str
     full_name: str | None = None
     is_active: bool
+    created_at: str | None = None
 
 
 class UserCreateIn(BaseModel):
@@ -23,3 +24,7 @@ class UserPatchIn(BaseModel):
 
 class UserStatusIn(BaseModel):
     is_active: bool
+
+
+class UserDeleteIn(BaseModel):
+    user_ids: list[str]

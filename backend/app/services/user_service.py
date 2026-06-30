@@ -55,3 +55,9 @@ class UserService:
         user.is_active = is_active
         await self.db.flush()
         return user
+
+    async def delete(self, user_id: str) -> None:
+        user = await self._get(user_id)
+        if not user:
+            raise ValueError("User not found")
+        await self.db.delete(user)
