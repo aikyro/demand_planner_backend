@@ -45,21 +45,23 @@ services:
     command: celery -A app.tasks.celery_app worker --loglevel=info
     volumes: ["./backend:/code"]
 
-  # The ADK lives in its own repo (demand_forecasting_adk) with an adk_service/ wrapper.
-  # Uncomment and point `context` at that repo to run it alongside:
-  # adk-service:
-  #   build:
-  #     context: ../../../PycharmProjects/demand_forecasting_adk
-  #   env_file: .env
-  #   environment:
-  #     GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-  #     ADK_SECRET: ${ADK_SECRET}
-  #     DATABASE_URL: ${DATABASE_URL}
-  #     REDIS_URL: ${REDIS_URL}
-  #   depends_on: [postgres, redis]
-  #   ports: ["9000:9000"]
-  #   volumes: ["adk_artifacts:/app/.adk"]
+  # ADK Service for Demand Forecasting Agent
+  adk-service:
+    build:
+      context: ../Demand_forcasting_adk
+    env_file: ../Demand_forcasting_adk/demand_forecasting_agent/.env
+    environment:
+      - GOOGLE_GENAI_USE_VERTEXAI=False
+      # ADK_SECRET is read from .env file
+    depends_on: [postgres]
+    ports: ["9000:9000"]
+    volumes:
+      - adk_data:/app/data
+      # Development: Mount artifacts to local folder (set ARTIFACTS_DIR in .env)
+      # For production, use named volume: adk_artifacts:/app/.adk/artifacts
+      - ../Demand_forcasting_adk/.adk/artifacts:/app/.adk/artifacts
 
 volumes:
   pgdata:
   adk_artifacts:
+  adk_data:
