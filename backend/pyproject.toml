@@ -24,6 +24,11 @@ dependencies = [
   "pandas>=2.2",
   "python-multipart>=0.0.9",
   "email-validator>=2.1",
+  # File processing dependencies for upload system
+  "openpyxl>=3.1.0",
+  "xlrd>=2.0.0",
+  "python-magic>=0.4.27",
+  "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
