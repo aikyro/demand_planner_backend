@@ -8,6 +8,15 @@ LOOKUP_COLUMNS = [
     "location_id", "location_name", "state", "region", "channel",
 ]
 
+# M5 Dataset Columns
+CALENDAR_COLUMNS = [
+    "date", "wm_yr_wk", "weekday", "wday", "month", "year", "d",
+    "event_name_1", "event_type_1", "event_name_2", "event_type_2",
+    "snap_CA", "snap_TX", "snap_WI"
+]
+SELL_PRICES_COLUMNS = ["store_id", "item_id", "wm_yr_wk", "sell_price"]
+SALES_COLUMNS = ["item_store_id", "item_id", "dept_id", "cat_id", "store_id", "state_id", "d", "sales"]
+
 
 class SourceConfigIn(BaseModel):
     file_name: str
