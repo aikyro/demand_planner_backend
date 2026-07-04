@@ -121,9 +121,17 @@ async def stream_session_progress(
             # Also get initial progress from hash (if any)
             progress_key = f"progress:{session_id}"
             initial_data = await redis.hgetall(progress_key)
-            if initial_data and 'modeling_data' in initial_data:
-                # Send initial state
-                yield f"data: {initial_data['modeling_data']}\n\n"
+
+            # Send all available initial states (modeling_data, forecasts, etc.)
+            if initial_data:
+                for task_name, task_data in initial_data.items():
+                    if task_name not in ['updated_at']:  # Skip metadata
+                        try:
+                            # Parse and send each task's progress
+                            progress_json = task_data
+                            yield f"data: {progress_json}\n\n"
+                        except:
+                            pass
 
             # Stream messages
             async for message in pubsub.listen():
@@ -169,6 +177,9 @@ async def stream_agent_chat(
         "session_id": data.session_id,
         "message": data.message,
         "user_id": user.id,
+        "state": {
+            "company_id": user.company_id  # ← Inject company_id into session state
+        }
     }
     headers = {
         "X-ADK-Secret": "change-me-adk-secret",  # TODO: use settings.ADK_SECRET

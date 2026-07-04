@@ -13,9 +13,12 @@ async def create_session(
     """Create a new agent session."""
     payload = {
         "input_paths": input_paths,
-        "company_id": company_id,
+        "company_id": company_id,  # Keep for ADK server reference
         "title": title,
         "user_id": user_id,
+        "state": {
+            "company_id": company_id,  # ← Store in session state for tools
+        }
     }
     headers = {"X-ADK-Secret": settings.ADK_SECRET}
     timeout = httpx.Timeout(30.0, read=60.0)
@@ -65,12 +68,16 @@ async def delete_session(session_id: str) -> dict:
         return resp.json()
 
 
-async def stream_chat(session_id: str, message: str, user_id: str = "system") -> dict:
+async def stream_chat(session_id: str, message: str, user_id: str = "system", company_id: str = None) -> dict:
     """Send a chat message and get streaming response."""
     payload = {
         "session_id": session_id,
         "message": message,
         "user_id": user_id,
+        "state": {
+            "company_id": company_id,
+            "session_id": session_id  # ← Also pass session_id in state for tools
+        }
     }
     headers = {"X-ADK-Secret": settings.ADK_SECRET}
     timeout = httpx.Timeout(60.0, read=1800.0)  # Long timeout for streaming
