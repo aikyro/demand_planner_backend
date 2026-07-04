@@ -5,3 +5,5 @@ venv/
 .pytest_cache/
 .adk/
 artifacts/
+\dpb_backend.egg-info
+venv_backend/
