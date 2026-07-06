@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     APP_BASE_URL: str = "http://localhost:3000"
 
     KPI_CACHE_TTL: int = 300
+    # Dashboard cache TTLs (seconds): volatile operational data vs. slow reference data.
+    DASHBOARD_CACHE_TTL: int = 900  # 15 min for executive/operational metrics
+    DASHBOARD_REFERENCE_TTL: int = 3600  # 1 hour for filter option lists
 
     # Upload System Configuration
     # File size limits (in bytes)

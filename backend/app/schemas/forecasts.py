@@ -11,15 +11,18 @@ class GenerateIn(BaseModel):
 
 class SessionOut(BaseModel):
     session_id: str
-    dataset_name: str | None = None
-    horizon: int
-    aggregation: str
     status: str
+    generated_by: str | None = None
+    # From the session's JSON metadata (notes field):
+    dataset_name: str | None = None
+    horizon: int | None = None
+    aggregation: str | None = None
     model_used: str | None = None
-    sku_count: int
-    row_count: int
+    sku_count: int = 0
+    row_count: int = 0
     metrics: dict[str, Any] | None = None
     generated_at: str | None = None
+    created_at: str | None = None
     published_at: str | None = None
 
 
@@ -34,9 +37,9 @@ class StatusOut(BaseModel):
 
 
 class ForecastRowOut(BaseModel):
-    product_id: str
-    date: str
-    forecast_value: float
-    confidence_lower: float | None = None
-    confidence_upper: float | None = None
-    forecast_type: str
+    item_id: str | None
+    date: str | None
+    predictions: float | None
+    quantile_0_1: float | None = None
+    quantile_0_9: float | None = None
+    model_used: str | None = None

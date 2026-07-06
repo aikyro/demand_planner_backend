@@ -15,6 +15,9 @@ def _out(o) -> OverrideOut:
         original_value=float(o.original_value), override_value=float(o.override_value),
         pct_change=float(o.pct_change) if o.pct_change is not None else None,
         status=o.status, reason=o.reason,
+        created_at=o.created_at.isoformat() if o.created_at else None,
+        approved_by=str(o.approved_by) if o.approved_by else None,
+        approved_at=o.approved_at.isoformat() if o.approved_at else None,
     )
 
 
@@ -23,6 +26,24 @@ async def list_overrides(status_filter: str | None = Query(None, alias="status")
                          user: CurrentUser = Depends(get_current_user),
                          db: AsyncSession = Depends(get_db)):
     return [_out(o) for o in await OverrideService(db, user.company_id).list(status_filter)]
+
+
+@router.get("/forecast/{forecast_id}", response_model=list[OverrideOut])
+async def overrides_for_forecast(forecast_id: str,
+                                 user: CurrentUser = Depends(get_current_user),
+                                 db: AsyncSession = Depends(get_db)):
+    """All overrides recorded against a single forecast row (newest first)."""
+    return [_out(o) for o in await OverrideService(db, user.company_id).list_for_forecast(forecast_id)]
+
+
+@router.get("/{override_id}", response_model=OverrideOut)
+async def get_override(override_id: str,
+                       user: CurrentUser = Depends(get_current_user),
+                       db: AsyncSession = Depends(get_db)):
+    ov = await OverrideService(db, user.company_id).get(override_id)
+    if not ov:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Override not found")
+    return _out(ov)
 
 
 @router.post("", response_model=OverrideOut)
