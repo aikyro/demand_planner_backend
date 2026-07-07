@@ -16,6 +16,7 @@ class PreviewResponse(BaseModel):
     preview_data: PreviewData = Field(..., description="Row-based preview of the dataset")
     total_rows: int = Field(..., description="Total rows in the dataset")
     total_columns: int = Field(..., description="Total columns in the dataset")
+    file_size: Optional[int] = Field(None, description="Size of file in bytes")
 
 
 class DateRange(BaseModel):

@@ -58,7 +58,8 @@ async def get_dataset_preview(
         upload_id=upload.id,
         preview_data=PreviewData(first_rows=first_rows, last_rows=last_rows),
         total_rows=upload.total_rows or len(first_rows),
-        total_columns=total_cols
+        total_columns=total_cols,
+        file_size=upload.file_size
     )
 
 

@@ -106,7 +106,9 @@ class HistoryService:
                     warning_count=uh.warning_count,
                     file_size=uh.file_size,
                     file_type=uh.file_type,
-                    columns=columns
+                    columns=columns,
+                    source_type=summary.get("source_type"),
+                    session_id=summary.get("session_id")
                 )
             )
             
