@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models.upload import UploadProgress
-from app.models import SourceConfig, DataUpload, Lookup, Calendar, SellPrice, Sales
+from app.models import SourceConfig, DataUpload, Lookup, Calendar, SellPrice, Sales, Actual
 from app.schemas.upload import FileType
 from app.services.file_parser import FileParser
 from app.services.upload_service import UploadService
@@ -120,9 +121,14 @@ class ImportEngine:
             raise ValueError(f"Upload {upload_id} not found")
 
         # Validate state transition to importing
-        # Note: If it's already importing, failed, or completed, raise error
-        if upload.status in ["completed", "failed", "cancelled"]:
+        # Note: A `failed` upload must be allowed to retry (e.g. celery retry
+        # after a transient IntegrityError). Only block when the upload has
+        # already reached a successful terminal state or was cancelled.
+        if upload.status in ["completed", "cancelled"]:
             raise ValueError(f"Upload {upload_id} is already in terminal status {upload.status}")
+        if upload.status == "failed":
+            # Reset to importing so a retry can proceed.
+            logger.info(f"Retrying import for previously-failed upload {upload_id}")
 
         logger.info(f"Transitioning upload {upload_id} to importing state")
         upload.status = "importing"
@@ -175,7 +181,6 @@ class ImportEngine:
                             "id": str(uuid.uuid4()),
                             "company_id": self.company_id,
                             "created_at": datetime.now(timezone.utc),
-                            "updated_at": datetime.now(timezone.utc),
                             "date": safe_date(entry.get("date")),
                             "wm_yr_wk": safe_int(entry.get("wm_yr_wk")),
                             "weekday": safe_str(entry.get("weekday")),
@@ -193,7 +198,30 @@ class ImportEngine:
                         })
 
                     if batch:
-                        await self.db.execute(insert(Calendar), batch)
+                        # Idempotent UPSERT: if a row with the same (company_id, d)
+                        # survives the DELETE above (e.g. a stale row from a
+                        # previous import or a concurrent writer), update it
+                        # instead of erroring out on the unique constraint.
+                        stmt = pg_insert(Calendar).values(batch)
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=["company_id", "d"],
+                            set_={
+                                "date": stmt.excluded.date,
+                                "wm_yr_wk": stmt.excluded.wm_yr_wk,
+                                "weekday": stmt.excluded.weekday,
+                                "wday": stmt.excluded.wday,
+                                "month": stmt.excluded.month,
+                                "year": stmt.excluded.year,
+                                "event_name_1": stmt.excluded.event_name_1,
+                                "event_type_1": stmt.excluded.event_type_1,
+                                "event_name_2": stmt.excluded.event_name_2,
+                                "event_type_2": stmt.excluded.event_type_2,
+                                "snap_CA": stmt.excluded.snap_CA,
+                                "snap_TX": stmt.excluded.snap_TX,
+                                "snap_WI": stmt.excluded.snap_WI,
+                            },
+                        )
+                        await self.db.execute(stmt)
                     total_imported += len(batch)
                     
                     # Increment progress ratio
@@ -323,6 +351,63 @@ class ImportEngine:
                 upload.processed_rows = total_imported
                 upload.progress_percentage = 98
                 await self.db.flush()
+
+            elif source_type == "actuals":
+                session_id = meta.get("session_id")
+                if not session_id:
+                    raise ValueError("session_id is required for importing actuals")
+
+                item_id_col = inverted_mapping.get("product_id") or inverted_mapping.get("item_id")
+                date_col = inverted_mapping.get("date")
+                actual_val_col = inverted_mapping.get("actual_quantity") or inverted_mapping.get("actual_value")
+
+                if not item_id_col or not date_col or not actual_val_col:
+                    raise ValueError("actuals import requires mappings for item_id, date, and actual_value")
+
+                import uuid
+                
+                logger.info(f"Replacing Actuals records for session {session_id} and company {self.company_id}")
+                await self.db.execute(
+                    delete(Actual).where(
+                        Actual.company_id == self.company_id,
+                        Actual.session_id == session_id
+                    )
+                )
+
+                for chunk in self.file_parser.stream_file(staged_file_path, FileType(file_type)):
+                    batch = []
+                    for row in chunk.data:
+                        raw_item_id = row.get(item_id_col)
+                        raw_date = row.get(date_col)
+                        raw_val = row.get(actual_val_col)
+                        
+                        if not raw_item_id or not raw_date or raw_val is None:
+                            continue
+                            
+                        d = safe_date(raw_date)
+                        v = safe_float(raw_val)
+                        if not d or v is None:
+                            continue
+
+                        batch.append({
+                            "id": uuid.uuid4().hex,
+                            "session_id": session_id,
+                            "company_id": self.company_id,
+                            "item_id": safe_str(raw_item_id),
+                            "date": d,
+                            "actual_value": v
+                        })
+
+                    if batch:
+                        await self.db.execute(insert(Actual), batch)
+                    total_imported += len(batch)
+
+                    progress_fraction = chunk.chunk_index / chunk.total_chunks
+                    progress_val = int(91 + progress_fraction * 8)
+                    upload.progress_percentage = min(progress_val, 99)
+                    upload.processed_rows = total_imported
+                    await self.db.flush()
+                    await self.db.commit()
 
             else:
                 # For transaction/sales data: stream in chunks and create DataUpload batch records

@@ -824,7 +824,9 @@ class UploadService:
                 # Check for cancellation periodically
                 if await self._is_cancelled(upload_id):
                     logger.info(f"Upload {upload_id} has been cancelled by user. Aborting.")
-                    await self.cleanup_temp_files(file_path)
+                    # Cancellation is user-initiated — drop the staged file
+                    # so /tmp/uploads/ doesn't accumulate orphans.
+                    await self.remove_staged_file(file_path)
                     return
 
                 # Update stage to validating
@@ -977,6 +979,29 @@ class UploadService:
                 logger.info(f"Preserving temporary file for audit logs: {file_path}")
         except Exception as e:
             logger.warning(f"Failed to verify temporary file path {file_path}: {str(e)}")
+
+    async def remove_staged_file(self, file_path: str) -> None:
+        """
+        Remove a staged upload file from disk. Used by the cancel path.
+
+        Unlike `cleanup_temp_files` (which preserves the file for audit on
+        failed/importing uploads), this actually unlinks the file. Caller is
+        responsible for not invoking this on uploads we want to keep — i.e.
+        only call this when the upload has reached a terminal "cancelled"
+        status and the user clearly indicated they don't want the data.
+
+        Args:
+            file_path: Path to the staged upload file
+        """
+        if not file_path:
+            return
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Removed staged file after cancellation: {file_path}")
+        except Exception as e:
+            # Best-effort: don't fail the cancel just because the unlink failed.
+            logger.warning(f"Failed to remove staged file {file_path}: {str(e)}")
 
 
 def sanitize_filename(filename: str) -> str:

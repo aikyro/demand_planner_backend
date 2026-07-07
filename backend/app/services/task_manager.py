@@ -1,6 +1,7 @@
 """Service for managing Celery tasks and task lifecycle."""
 
 import logging
+import os
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -84,6 +85,23 @@ class TaskManager:
             celery_app.control.revoke(celery_task_id, terminate=True)
         else:
             logger.warning(f"Celery task ID not found in metadata for upload {upload_id}")
+
+        # Remove the staged file from /tmp/uploads/ — the user explicitly
+        # cancelled, so it should not be retained. Best-effort: if the file
+        # was never written (POST aborted) or already cleaned up by the
+        # worker, just log and move on.
+        staged_file_path = (upload.meta_info or {}).get("staged_file_path")
+        if staged_file_path:
+            try:
+                if os.path.exists(staged_file_path):
+                    os.remove(staged_file_path)
+                    logger.info(
+                        f"Removed staged file after cancellation: {staged_file_path}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to remove staged file {staged_file_path}: {e}"
+                )
 
         await self.db.commit()
         return True
