@@ -100,6 +100,41 @@ class DashboardService:
             "location_id": uniq("location_id"),
         }
 
+    def _apply_lookup_filters(
+        self,
+        stmt,
+        model_cls,
+        category: str | None = None,
+        brand: str | None = None,
+        state: str | None = None,
+        store: str | None = None,
+        channel: str | None = None,
+    ):
+        has_filters = any([category, brand, state, store, channel])
+        if not has_filters:
+            return stmt
+
+        stmt = stmt.outerjoin(
+            Lookup,
+            and_(
+                model_cls.item_id == Lookup.product_id,
+                model_cls.company_id == Lookup.company_id,
+            )
+        )
+
+        if category and category != "All":
+            stmt = stmt.where(Lookup.category == category)
+        if brand and brand != "All":
+            stmt = stmt.where(Lookup.brand == brand)
+        if state and state != "All":
+            stmt = stmt.where(Lookup.state == state)
+        if store and store != "All":
+            stmt = stmt.where(Lookup.location_id == store)
+        if channel and channel != "All":
+            stmt = stmt.where(Lookup.channel == channel)
+
+        return stmt
+
     # ------------------------------------------------------------------
     # Executive dashboard (forecast-table driven: forecasts + actuals)
     # ------------------------------------------------------------------
@@ -133,12 +168,22 @@ class DashboardService:
         date_from: date_cls | None = None,
         date_to: date_cls | None = None,
         session_id: str | None = None,
+        category: str | None = None,
+        brand: str | None = None,
+        state: str | None = None,
+        store: str | None = None,
+        channel: str | None = None,
     ) -> dict:
         cache_filters = {
             "item_ids": sorted(item_ids) if item_ids else None,
             "date_from": date_from.isoformat() if date_from else None,
             "date_to": date_to.isoformat() if date_to else None,
             "session_id": session_id,
+            "category": category,
+            "brand": brand,
+            "state": state,
+            "store": store,
+            "channel": channel,
         }
         key = redis_service.cache_key(
             self.company_id, "executive",
@@ -151,15 +196,13 @@ class DashboardService:
         fc = self._forecast_conds(item_ids, date_from, date_to, session_id)
 
         # Forecast-side aggregates.
-        total_forecasts, active_items, total_predicted = (
-            await self.db.execute(
-                select(
-                    func.count(Forecast.id),
-                    func.count(distinct(Forecast.item_id)),
-                    func.coalesce(func.sum(Forecast.predictions), 0),
-                ).where(and_(*fc))
-            )
-        ).one()
+        stmt_fc = select(
+            func.count(Forecast.id),
+            func.count(distinct(Forecast.item_id)),
+            func.coalesce(func.sum(Forecast.predictions), 0),
+        ).where(and_(*fc))
+        stmt_fc = self._apply_lookup_filters(stmt_fc, Forecast, category, brand, state, store, channel)
+        total_forecasts, active_items, total_predicted = (await self.db.execute(stmt_fc)).one()
 
         # Accuracy / bias at the (session, item, date) grain via join to actuals.
         join_on = and_(
@@ -168,19 +211,19 @@ class DashboardService:
             Forecast.item_id == Actual.item_id,
             Forecast.date == Actual.date,
         )
-        sum_abs_err, sum_actual, sum_err, matched = (
-            await self.db.execute(
-                select(
-                    func.coalesce(func.sum(func.abs(Forecast.predictions - Actual.actual_value)), 0),
-                    func.coalesce(func.sum(Actual.actual_value), 0),
-                    func.coalesce(func.sum(Forecast.predictions - Actual.actual_value), 0),
-                    func.count(),
-                )
-                .select_from(Forecast)
-                .join(Actual, join_on)
-                .where(and_(*fc))
+        stmt_join = (
+            select(
+                func.coalesce(func.sum(func.abs(Forecast.predictions - Actual.actual_value)), 0),
+                func.coalesce(func.sum(Actual.actual_value), 0),
+                func.coalesce(func.sum(Forecast.predictions - Actual.actual_value), 0),
+                func.count(),
             )
-        ).one()
+            .select_from(Forecast)
+            .join(Actual, join_on)
+            .where(and_(*fc))
+        )
+        stmt_join = self._apply_lookup_filters(stmt_join, Forecast, category, brand, state, store, channel)
+        sum_abs_err, sum_actual, sum_err, matched = (await self.db.execute(stmt_join)).one()
 
         sum_actual = float(sum_actual)
         accuracy = (
@@ -190,20 +233,21 @@ class DashboardService:
         bias_pct = round(float(sum_err) / sum_actual * 100, 2) if sum_actual else None
 
         # Forecast-vs-actual trend over time.
-        fc_trend = (
-            await self.db.execute(
-                select(Forecast.date, func.coalesce(func.sum(Forecast.predictions), 0))
-                .where(and_(*fc))
-                .group_by(Forecast.date)
-            )
-        ).all()
-        ac_trend = (
-            await self.db.execute(
-                select(Actual.date, func.coalesce(func.sum(Actual.actual_value), 0))
-                .where(and_(*self._actual_conds(item_ids, date_from, date_to, session_id)))
-                .group_by(Actual.date)
-            )
-        ).all()
+        stmt_fc_trend = (
+            select(Forecast.date, func.coalesce(func.sum(Forecast.predictions), 0))
+            .where(and_(*fc))
+            .group_by(Forecast.date)
+        )
+        stmt_fc_trend = self._apply_lookup_filters(stmt_fc_trend, Forecast, category, brand, state, store, channel)
+        fc_trend = (await self.db.execute(stmt_fc_trend)).all()
+
+        stmt_ac_trend = (
+            select(Actual.date, func.coalesce(func.sum(Actual.actual_value), 0))
+            .where(and_(*self._actual_conds(item_ids, date_from, date_to, session_id)))
+            .group_by(Actual.date)
+        )
+        stmt_ac_trend = self._apply_lookup_filters(stmt_ac_trend, Actual, category, brand, state, store, channel)
+        ac_trend = (await self.db.execute(stmt_ac_trend)).all()
 
         merged: dict = {}
         for d, v in fc_trend:
@@ -269,6 +313,11 @@ class DashboardService:
         date_from: date_cls | None = None,
         date_to: date_cls | None = None,
         session_id: str | None = None,
+        category: str | None = None,
+        brand: str | None = None,
+        state: str | None = None,
+        store: str | None = None,
+        channel: str | None = None,
         sort_by: str = "accuracy",
         order: str = "asc",
         page: int = 1,
@@ -285,6 +334,11 @@ class DashboardService:
             "date_from": date_from.isoformat() if date_from else None,
             "date_to": date_to.isoformat() if date_to else None,
             "session_id": session_id,
+            "category": category,
+            "brand": brand,
+            "state": state,
+            "store": store,
+            "channel": channel,
             "sort_by": sort_by,
             "order": order,
             "page": page,
@@ -305,22 +359,22 @@ class DashboardService:
             Forecast.item_id == Actual.item_id,
             Forecast.date == Actual.date,
         )
-        rows = (
-            await self.db.execute(
-                select(
-                    Forecast.item_id,
-                    func.count().label("points"),
-                    func.coalesce(func.sum(func.abs(Forecast.predictions - Actual.actual_value)), 0),
-                    func.coalesce(func.sum(Actual.actual_value), 0),
-                    func.coalesce(func.sum(Forecast.predictions - Actual.actual_value), 0),
-                    func.coalesce(func.sum(Forecast.predictions), 0),
-                )
-                .select_from(Forecast)
-                .join(Actual, join_on)
-                .where(and_(*fc))
-                .group_by(Forecast.item_id)
+        stmt = (
+            select(
+                Forecast.item_id,
+                func.count().label("points"),
+                func.coalesce(func.sum(func.abs(Forecast.predictions - Actual.actual_value)), 0),
+                func.coalesce(func.sum(Actual.actual_value), 0),
+                func.coalesce(func.sum(Forecast.predictions - Actual.actual_value), 0),
+                func.coalesce(func.sum(Forecast.predictions), 0),
             )
-        ).all()
+            .select_from(Forecast)
+            .join(Actual, join_on)
+            .where(and_(*fc))
+            .group_by(Forecast.item_id)
+        )
+        stmt = self._apply_lookup_filters(stmt, Forecast, category, brand, state, store, channel)
+        rows = (await self.db.execute(stmt)).all()
 
         items: list[dict] = []
         for item_id, points, abs_err, actual_sum, err_sum, pred_sum in rows:
@@ -380,14 +434,24 @@ class DashboardService:
     # so queries go through parameterized raw SQL — never interpolate user input.
     DISTRIBUTION_DIMS = {"cat_id", "dept_id", "store_id", "state_id", "item_id"}
 
-    async def distribution(self, dim: str, session_id: str | None = None) -> dict:
+    async def distribution(
+        self,
+        dim: str,
+        session_id: str | None = None,
+        category: str | None = None,
+        brand: str | None = None,
+        state: str | None = None,
+        store: str | None = None,
+        channel: str | None = None,
+    ) -> dict:
         """Sales-volume share by a modeling_data dimension + Pareto stats +
         top/bottom products. Feeds the executive distribution/Pareto cards."""
         if dim not in self.DISTRIBUTION_DIMS:
             raise ValueError(f"Unsupported dimension '{dim}'")
 
         key = redis_service.cache_key(
-            self.company_id, "distribution", f"{dim}:{session_id or 'all'}"
+            self.company_id, "distribution",
+            f"{dim}:{session_id or 'all'}:{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}"
         )
         cached = await redis_service.get_json(key)
         if cached is not None:
@@ -398,13 +462,41 @@ class DashboardService:
         if session_id:
             params["session_id"] = session_id
 
+        join_clause = ""
+        filter_clauses = []
+        has_filters = any([category, brand, state, store, channel])
+        if has_filters:
+            join_clause = """
+                LEFT JOIN lookup ON modeling_data.item_id = lookup.product_id
+                                AND modeling_data.company_id = lookup.company_id
+                                AND modeling_data.store_id = lookup.location_id
+            """
+            if category and category != "All":
+                filter_clauses.append("AND lookup.category = :category")
+                params["category"] = category
+            if brand and brand != "All":
+                filter_clauses.append("AND lookup.brand = :brand")
+                params["brand"] = brand
+            if state and state != "All":
+                filter_clauses.append("AND lookup.state = :state")
+                params["state"] = state
+            if store and store != "All":
+                filter_clauses.append("AND lookup.location_id = :store")
+                params["store"] = store
+            if channel and channel != "All":
+                filter_clauses.append("AND lookup.channel = :channel")
+                params["channel"] = channel
+
+        filter_clause_str = " ".join(filter_clauses)
+
         shares = (
             await self.db.execute(
                 text(
-                    f"""SELECT {dim} AS label, COALESCE(SUM(sales), 0) AS volume
+                    f"""SELECT modeling_data.{dim} AS label, COALESCE(SUM(modeling_data.sales), 0) AS volume
                         FROM modeling_data
-                        WHERE company_id = :company_id AND {dim} IS NOT NULL {sess_clause}
-                        GROUP BY {dim} ORDER BY volume DESC"""
+                        {join_clause}
+                        WHERE modeling_data.company_id = :company_id AND modeling_data.{dim} IS NOT NULL {sess_clause} {filter_clause_str}
+                        GROUP BY modeling_data.{dim} ORDER BY volume DESC"""
                 ),
                 params,
             )
@@ -423,10 +515,11 @@ class DashboardService:
         item_rows = (
             await self.db.execute(
                 text(
-                    f"""SELECT item_id, COALESCE(SUM(sales), 0) AS volume
+                    f"""SELECT modeling_data.item_id, COALESCE(SUM(modeling_data.sales), 0) AS volume
                         FROM modeling_data
-                        WHERE company_id = :company_id AND item_id IS NOT NULL {sess_clause}
-                        GROUP BY item_id ORDER BY volume DESC"""
+                        {join_clause}
+                        WHERE modeling_data.company_id = :company_id AND modeling_data.item_id IS NOT NULL {sess_clause} {filter_clause_str}
+                        GROUP BY modeling_data.item_id ORDER BY volume DESC"""
                 ),
                 params,
             )
