@@ -182,6 +182,7 @@ class GeneratedService:
                     "item_id": r.item_id,
                     "date": r.date.isoformat() if r.date else None,
                     "predictions": float(r.predictions) if r.predictions is not None else None,
+                    "original_value": float(r.original_value) if r.original_value is not None else (float(r.predictions) if r.predictions is not None else None),
                     "model_used": r.model_used,
                 }
                 for r in rows

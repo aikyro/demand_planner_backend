@@ -50,7 +50,8 @@ async def get_override(override_id: str,
 async def create_override(data: OverrideIn, user: CurrentUser = Depends(min_role("analyst")),
                           db: AsyncSession = Depends(get_db)):
     try:
-        ov, notify_email = await OverrideService(db, user.company_id).create(data, user.id)
+        # Pass user role to determine auto-approval based on role
+        ov, notify_email = await OverrideService(db, user.company_id).create(data, user.id, user.role)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     await db.commit()
