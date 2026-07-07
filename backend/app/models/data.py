@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Boolean, Integer, Numeric, Date, DateTime
+from sqlalchemy import String, Boolean, Integer, Numeric, Date, DateTime, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, UUIDMixin, TimestampMixin
@@ -55,6 +55,9 @@ class Lookup(Base, UUIDMixin):
 
 class Calendar(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "calendar"
+    __table_args__ = (
+        UniqueConstraint("company_id", "d", name="uq_calendar_company_d"),
+    )
     company_id: Mapped[str] = mapped_column(String(50), index=True)
     date: Mapped[datetime] = mapped_column(Date, nullable=False)
     wm_yr_wk: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -62,7 +65,11 @@ class Calendar(Base, UUIDMixin, TimestampMixin):
     wday: Mapped[int] = mapped_column(Integer)
     month: Mapped[int] = mapped_column(Integer)
     year: Mapped[int] = mapped_column(Integer)
-    d: Mapped[str] = mapped_column(String(10), unique=True)
+    # NOTE: `d` is a calendar-day string like "d_1549". The M5 retail calendar
+    # uses the same `d` values across every tenant, so a global UNIQUE here
+    # would block a second tenant from ever importing the calendar. Scope
+    # uniqueness to (company_id, d) instead — see uq_calendar_company_d above.
+    d: Mapped[str] = mapped_column(String(10))
     event_name_1: Mapped[str | None] = mapped_column(String(100), nullable=True)
     event_type_1: Mapped[str | None] = mapped_column(String(50), nullable=True)
     event_name_2: Mapped[str | None] = mapped_column(String(100), nullable=True)

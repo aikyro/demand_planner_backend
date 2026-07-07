@@ -31,12 +31,19 @@ CALENDAR_REQUIRED = ["date", "wm_yr_wk", "d"]
 SELL_PRICES_REQUIRED = ["store_id", "item_id", "wm_yr_wk", "sell_price"]
 SALES_REQUIRED = ["id", "item_id", "dept_id", "cat_id", "store_id", "state_id", "d"]
 
+# Actuals schemas
+ACTUALS_CANONICAL = ["item_id", "date", "actual_value"]
+ACTUALS_REQUIRED = ["item_id", "date", "actual_value"]
+
 # Common mapping shortcuts and synonyms
 CANONICAL_SYNONYMS = {
     "product_id": ["sku", "item", "prod", "product", "productid", "itemid", "skunumber", "material"],
     "location_id": ["store", "loc", "shop", "location", "locationid", "storeid", "branch", "plant"],
     "date": ["dt", "date", "time", "day", "transdate", "salesdate", "period", "timestamp"],
     "quantity": ["qty", "quantity", "units", "sold", "volume", "amount", "salesqty"],
+    "actual_quantity": ["actuals", "actual_quantity", "actual_value", "qty", "quantity", "units", "sold", "volume", "actual"],
+    "item_id": ["item_id", "product_id", "sku", "product", "itemid"],
+    "actual_value": ["actual_value", "actuals", "actual_quantity", "quantity", "value", "actual_val"],
     "revenue": ["rev", "revenue", "amount", "sales", "turnover", "total", "value"],
     "price": ["price", "prc", "rate", "cost", "unitprice"]
 }
@@ -68,6 +75,8 @@ class MappingService:
             canonical_columns = SALES_CANONICAL
         elif source_type == "lookup":
             canonical_columns = LOOKUP_CANONICAL
+        elif source_type == "actuals":
+            canonical_columns = ACTUALS_CANONICAL
         else:
             canonical_columns = TXN_CANONICAL
         
@@ -156,6 +165,8 @@ class MappingService:
             required_fields = SALES_REQUIRED
         elif source_type == "lookup":
             required_fields = LOOKUP_REQUIRED
+        elif source_type == "actuals":
+            required_fields = ACTUALS_REQUIRED
         else:
             required_fields = TXN_REQUIRED
         

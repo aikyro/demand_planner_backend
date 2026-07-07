@@ -163,6 +163,27 @@ SALES_COLUMNS_DEF = {
     "sales": ColumnDefinition("sales", "numeric", required=True, min_value=0)
 }
 
+# Canonical column definitions for actuals data
+ACTUALS_COLUMNS_DEF = {
+    "item_id": ColumnDefinition(
+        name="item_id",
+        data_type="string",
+        required=True
+    ),
+    "date": ColumnDefinition(
+        name="date",
+        data_type="date",
+        required=True,
+        format_pattern=r"^\d{4}-\d{2}-\d{2}$"
+    ),
+    "actual_value": ColumnDefinition(
+        name="actual_value",
+        data_type="numeric",
+        required=True,
+        min_value=0
+    )
+}
+
 
 class SchemaValidator:
     """
@@ -218,6 +239,9 @@ class SchemaValidator:
         elif source_type == "sales":
             column_defs = SALES_COLUMNS_DEF
             required_columns = list(SALES_COLUMNS_DEF.keys())
+        elif source_type == "actuals":
+            column_defs = ACTUALS_COLUMNS_DEF
+            required_columns = list(ACTUALS_COLUMNS_DEF.keys())
         else:
             return ValidationResult(
                 is_valid=False,
@@ -225,7 +249,7 @@ class SchemaValidator:
                 current_stage=ValidationStage.SCHEMA,
                 statistics=statistics,
                 errors=[ErrorClassifier.create_constraint_error(
-                    0, f"Unknown source type: {source_type}", "Use 'transaction', 'lookup', 'calendar', 'sell_prices' or 'sales'"
+                    0, f"Unknown source type: {source_type}", "Use 'transaction', 'lookup', 'calendar', 'sell_prices', 'sales' or 'actuals'"
                 )],
                 started_at=started_at,
                 completed_at=datetime.now()
@@ -551,4 +575,6 @@ def get_required_columns(source_type: str = "transaction") -> List[str]:
         return [col for col, defn in CALENDAR_COLUMNS_DEF.items() if defn.required]
     elif source_type == "sales":
         return list(SALES_COLUMNS_DEF.keys())
+    elif source_type == "actuals":
+        return list(ACTUALS_COLUMNS_DEF.keys())
     return []

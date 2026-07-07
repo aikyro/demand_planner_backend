@@ -82,6 +82,7 @@ class ConfirmImportIn(BaseModel):
     column_mappings: Dict[str, str] = Field(..., description="Confirmed mappings (user_column -> canonical_column)")
     proceed_with_warnings: bool = Field(default=False, description="Proceed even if validation alerts exist")
     source_type: Optional[str] = Field(default=None, description="Dataset category type (e.g. calendar, sell_prices, sales)")
+    session_id: Optional[str] = Field(default=None, description="Target forecast session ID for actuals")
 
 
 class ConfirmImportResponse(BaseModel):

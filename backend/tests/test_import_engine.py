@@ -82,7 +82,7 @@ async def test_execute_import_transaction_success(mock_upload_service_class, moc
         assert mock_upload.status == "completed"
         assert mock_upload.progress_percentage == 100
         assert mock_upload.processed_rows == 2
-        assert not os.path.exists(temp_path) # Staging file should be cleaned up!
+        assert os.path.exists(temp_path) # Staging file is preserved for audit logging!
         
         # Verify db.add is called for DataUpload batch record
         db_session.add.assert_called()
@@ -120,7 +120,7 @@ async def test_history_endpoints():
         company_id="company-1",
         user_id="user-1",
         source_config_id="source-1",
-        file_name="test.csv",
+        file_name="sales.csv",
         file_type="csv",
         file_size=100,
         upload_date=datetime.now(timezone.utc),
@@ -151,7 +151,7 @@ async def test_history_endpoints():
     
     # Mock list query records
     mock_list_res = MagicMock()
-    mock_list_res.all.return_value = [(mock_data_upload, mock_config_model)]
+    mock_list_res.all.return_value = [(mock_history, mock_config_model)]
     
     # Side effects for list vs detail
     # list count -> list records -> detail join row

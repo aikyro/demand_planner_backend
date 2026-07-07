@@ -47,7 +47,8 @@ class Forecast(Base, TimestampMixin):
     This table has a FIXED schema with the following columns:
     - id, session_id, company_id, model_used, created_at (metadata)
     - date, target_name (forecast date and item identifier)
-    - predictions (main forecast value)
+    - predictions (main forecast value - can be overridden)
+    - original_value (original ML forecast - never changes)
     - quantile_0_1, quantile_0_5, quantile_0_9 (prediction intervals)
     - item_id (to be added via migration)
 
@@ -62,6 +63,7 @@ class Forecast(Base, TimestampMixin):
     date: Mapped[datetime.date] = mapped_column(Date(), nullable=True)
     target_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     predictions: Mapped[float | None] = mapped_column(Numeric(15, 4), nullable=True)
+    original_value: Mapped[float | None] = mapped_column(Numeric(15, 4), nullable=True)
     quantile_0_1: Mapped[float | None] = mapped_column(Numeric(15, 4), nullable=True)
     quantile_0_5: Mapped[float | None] = mapped_column(Numeric(15, 4), nullable=True)
     quantile_0_9: Mapped[float | None] = mapped_column(Numeric(15, 4), nullable=True)

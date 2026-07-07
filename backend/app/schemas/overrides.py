@@ -16,6 +16,9 @@ class OverrideOut(BaseModel):
     pct_change: float | None = None
     status: str
     reason: str | None = None
+    created_at: str | None = None
+    approved_by: str | None = None
+    approved_at: str | None = None
 
 
 class DecisionIn(BaseModel):
