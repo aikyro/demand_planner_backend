@@ -15,9 +15,27 @@ def required_rank(pct: float) -> int:
     return ROLE_RANK["admin"]         # manager+director / executive
 
 
-def tier_status(pct: float) -> str:
-    """Initial override status for a % change: auto-approved or routed to a tier."""
+def tier_status(pct: float, creator_role: str = "analyst") -> str:
+    """Initial override status for a % change: auto-approved or routed to a tier.
+
+    Logic:
+    - Admin: always auto-approved (full authority)
+    - Planner: auto-approve if ≤25%, otherwise pending_admin
+    - Analyst: ≤10% auto, 10-25% pending_planner, >25% pending_admin
+    """
     pct = abs(pct)
+
+    # Admin has full authority - always auto-approved
+    if creator_role == "admin":
+        return "approved"
+
+    # Planner can approve up to 25% themselves
+    if creator_role == "planner":
+        if pct <= 25:
+            return "approved"
+        return "pending_admin"
+
+    # Analyst: standard tiered approval
     if pct <= 10:
         return "approved"
     if pct <= 25:
@@ -54,13 +72,13 @@ class OverrideService:
         )).scalars().first()
         return u.email if u else None
 
-    async def create(self, data, user_id: str) -> tuple[Override, str | None]:
+    async def create(self, data, user_id: str, user_role: str = "analyst") -> tuple[Override, str | None]:
         fc = await self._forecast(data.forecast_id)
         if not fc:
             raise ValueError("Forecast not found")
         original = float(fc.predictions or 0)
         pct = ((data.override_value - original) / original * 100) if original else 0.0
-        status = tier_status(pct)
+        status = tier_status(pct, user_role)
         ov = Override(
             company_id=self.company_id, forecast_id=fc.id,
             product_id=fc.item_id or fc.target_name or "unknown",
