@@ -693,6 +693,14 @@ async def delete_upload(
     
     if record:
         meta = getattr(record, "meta_info", {}) or {}
+        staged_file = meta.get("staged_file_path")
+        if staged_file and os.path.exists(staged_file):
+            try:
+                os.remove(staged_file)
+                logger.info(f"Deleted temporary staging file from disk: {staged_file}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary staging file {staged_file}: {str(e)}")
+        
         summary = getattr(record, "result_summary", {}) or {}
         source_type = meta.get("source_type") or summary.get("source_type")
         

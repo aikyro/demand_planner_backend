@@ -529,7 +529,8 @@ class UploadService:
                 "error_message": upload.error_message,
                 "stages": stages,
                 "columns": columns,
-                "source_type": meta.get("source_type")
+                "source_type": meta.get("source_type"),
+                "session_id": meta.get("session_id")
             }
         )
 

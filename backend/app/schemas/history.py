@@ -36,6 +36,8 @@ class UploadHistoryItem(BaseModel):
     file_size: Optional[int] = Field(None, description="File size in bytes")
     file_type: Optional[str] = Field(None, description="File format extension")
     columns: Optional[List[str]] = Field(default=None, description="Column headers of the uploaded dataset")
+    source_type: Optional[str] = Field(None, description="Source type of data (e.g. sales, calendar, actuals)")
+    session_id: Optional[str] = Field(None, description="Forecast session ID (if applicable, e.g. actuals)")
 
 
 class UploadHistoryListResponse(BaseModel):
