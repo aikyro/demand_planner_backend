@@ -739,6 +739,16 @@ async def delete_upload(
             logger.info(f"Clearing Lookup table for company {user.company_id}")
             await db.execute(delete(Lookup).where(Lookup.company_id == user.company_id))
 
+        elif source_type_lower == "actuals":
+            from app.models import Actual
+            session_id = meta.get("session_id")
+            if session_id:
+                logger.info(f"Clearing Actual records for session {session_id} and company {user.company_id}")
+                await db.execute(delete(Actual).where(Actual.company_id == user.company_id, Actual.session_id == session_id))
+            else:
+                logger.info(f"Clearing all Actual records for company {user.company_id}")
+                await db.execute(delete(Actual).where(Actual.company_id == user.company_id))
+
     # 3. Clean up the tracking records
     await db.execute(delete(DataUpload).where(DataUpload.id == upload_id, DataUpload.company_id == user.company_id))
     await db.execute(delete(UploadProgress).where(UploadProgress.id == upload_id, UploadProgress.company_id == user.company_id))

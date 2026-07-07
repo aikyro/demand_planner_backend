@@ -139,8 +139,22 @@ async def suggest_mappings(
         user_cols = list(meta["preview_data"]["first_rows"][0].keys())
         
     source_type = meta.get("source_type", "transaction")
-    from app.services.mapping_service import TXN_CANONICAL, LOOKUP_CANONICAL
-    canonical_columns = LOOKUP_CANONICAL if source_type == "lookup" else TXN_CANONICAL
+    from app.services.mapping_service import (
+        TXN_CANONICAL, LOOKUP_CANONICAL, CALENDAR_CANONICAL,
+        SELL_PRICES_CANONICAL, SALES_CANONICAL, ACTUALS_CANONICAL
+    )
+    if source_type == "calendar":
+        canonical_columns = CALENDAR_CANONICAL
+    elif source_type in ("sell_prices", "sell_price"):
+        canonical_columns = SELL_PRICES_CANONICAL
+    elif source_type == "sales":
+        canonical_columns = SALES_CANONICAL
+    elif source_type == "lookup":
+        canonical_columns = LOOKUP_CANONICAL
+    elif source_type == "actuals":
+        canonical_columns = ACTUALS_CANONICAL
+    else:
+        canonical_columns = TXN_CANONICAL
     
     # Compute unmapped columns lists
     unmapped_columns = [col for col in user_cols if col not in suggested]
@@ -320,6 +334,8 @@ async def import_dataset(
     meta = copy.deepcopy(upload.meta_info) if upload.meta_info else {}
     source_type = body.source_type or meta.get("source_type", "transaction")
     meta["source_type"] = source_type
+    if body.session_id:
+        meta["session_id"] = body.session_id
     upload.meta_info = meta
     flag_modified(upload, "meta_info")
     

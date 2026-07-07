@@ -11,10 +11,10 @@ from typing import AsyncIterator
 from sqlalchemy import select, func, distinct, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ForecastSession, Forecast, ModelingData
+from app.models import ForecastSession, Forecast, ModelingData, Actual
 
 # Whitelist: user-supplied "type" → real table. Never interpolate user input.
-TABLES = {"modeling_data": "modeling_data", "forecasts": "forecasts"}
+TABLES = {"modeling_data": "modeling_data", "forecasts": "forecasts", "actuals": "actuals"}
 
 PREVIEW_ROWS = 10
 EXPORT_BATCH = 5000
@@ -70,6 +70,14 @@ class GeneratedService:
                     )
                 )
             ).scalar_one()
+            actuals_rows = (
+                await self.db.execute(
+                    select(func.count(Actual.id)).where(
+                        Actual.company_id == self.company_id,
+                        Actual.session_id == s.session_id,
+                    )
+                )
+            ).scalar_one()
             items.append({
                 "session_id": s.session_id,
                 "status": s.status,
@@ -79,6 +87,7 @@ class GeneratedService:
                 "item_count": int(item_count or 0),
                 "forecast_rows": int(row_count or 0),
                 "modeling_rows": int(modeling_rows or 0),
+                "actuals_rows": int(actuals_rows or 0),
                 "model_used": model_used,
             })
         return {"total": int(total), "page": page, "page_size": page_size, "items": items}
