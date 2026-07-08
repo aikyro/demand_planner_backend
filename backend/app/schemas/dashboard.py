@@ -5,6 +5,7 @@ class TrendPoint(BaseModel):
     date: str
     forecast: float
     actual: float | None = None
+    pristine: float | None = None
 
 
 class RecentSession(BaseModel):

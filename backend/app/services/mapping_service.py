@@ -9,14 +9,14 @@ from app.schemas.preview import MappingValidationResult
 logger = logging.getLogger(__name__)
 
 # Standard target columns in schema
-TXN_CANONICAL = ["product_id", "location_id", "date", "quantity", "revenue", "price"]
+TXN_CANONICAL = ["item_id", "store_id", "date", "quantity", "revenue", "price"]
 LOOKUP_CANONICAL = [
-    "product_id", "product_name", "category", "brand",
-    "location_id", "location_name", "state", "region", "channel"
+    "item_id", "item_name", "category", "brand",
+    "store_id", "store_name", "state", "region", "channel"
 ]
 
-TXN_REQUIRED = ["product_id", "location_id", "date", "quantity"]
-LOOKUP_REQUIRED = ["product_id", "location_id"]
+TXN_REQUIRED = ["item_id", "store_id", "date", "quantity"]
+LOOKUP_REQUIRED = ["item_id", "store_id"]
 
 # M5 Dataset schemas
 CALENDAR_CANONICAL = [
@@ -37,12 +37,11 @@ ACTUALS_REQUIRED = ["item_id", "date", "actual_value"]
 
 # Common mapping shortcuts and synonyms
 CANONICAL_SYNONYMS = {
-    "product_id": ["sku", "item", "prod", "product", "productid", "itemid", "skunumber", "material"],
-    "location_id": ["store", "loc", "shop", "location", "locationid", "storeid", "branch", "plant"],
+    "item_id": ["item_id", "product_id", "sku", "item", "prod", "product", "productid", "itemid", "skunumber", "material"],
+    "store_id": ["store_id", "location_id", "store", "loc", "shop", "location", "locationid", "storeid", "branch", "plant"],
     "date": ["dt", "date", "time", "day", "transdate", "salesdate", "period", "timestamp"],
     "quantity": ["qty", "quantity", "units", "sold", "volume", "amount", "salesqty"],
     "actual_quantity": ["actuals", "actual_quantity", "actual_value", "qty", "quantity", "units", "sold", "volume", "actual"],
-    "item_id": ["item_id", "product_id", "sku", "product", "itemid"],
     "actual_value": ["actual_value", "actuals", "actual_quantity", "quantity", "value", "actual_val"],
     "revenue": ["rev", "revenue", "amount", "sales", "turnover", "total", "value"],
     "price": ["price", "prc", "rate", "cost", "unitprice"]

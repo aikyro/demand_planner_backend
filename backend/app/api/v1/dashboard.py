@@ -43,6 +43,7 @@ async def executive(
     state: str | None = Query(None),
     store: str | None = Query(None),
     channel: str | None = Query(None),
+    horizon: str | None = Query(None),
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -60,6 +61,7 @@ async def executive(
         state=state,
         store=store,
         channel=channel,
+        horizon=horizon,
     )
 
 
@@ -78,6 +80,7 @@ async def operational(
     order: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
+    horizon: str | None = Query(None),
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -100,6 +103,7 @@ async def operational(
         order=order,
         page=page,
         page_size=page_size,
+        horizon=horizon,
     )
 
 
@@ -138,3 +142,69 @@ async def dashboard_filter_options(
 ):
     """Distinct product item_ids and recent sessions for dashboard filter dropdowns."""
     return await DashboardService(db, user.company_id).executive_filter_options()
+
+
+@router.get("/dashboard/registry")
+async def registry(
+    item_id: list[str] | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    session_id: str | None = Query(None),
+    category: str | None = Query(None),
+    brand: str | None = Query(None),
+    state: str | None = Query(None),
+    store: str | None = Query(None),
+    channel: str | None = Query(None),
+    sort_by: str = Query("accuracy"),
+    order: str = Query("asc", pattern="^(asc|desc)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=1000),
+    horizon: str | None = Query(None),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await DashboardService(db, user.company_id).registry(
+        item_ids=item_id,
+        date_from=date_from,
+        date_to=date_to,
+        session_id=session_id,
+        category=category,
+        brand=brand,
+        state=state,
+        store=store,
+        channel=channel,
+        sort_by=sort_by,
+        order=order,
+        page=page,
+        page_size=page_size,
+        horizon=horizon,
+    )
+
+
+@router.get("/dashboard/segmentation")
+async def segmentation(
+    item_id: list[str] | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    session_id: str | None = Query(None),
+    category: str | None = Query(None),
+    brand: str | None = Query(None),
+    state: str | None = Query(None),
+    store: str | None = Query(None),
+    channel: str | None = Query(None),
+    horizon: str | None = Query(None),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await DashboardService(db, user.company_id).segmentation(
+        item_ids=item_id,
+        date_from=date_from,
+        date_to=date_to,
+        session_id=session_id,
+        category=category,
+        brand=brand,
+        state=state,
+        store=store,
+        channel=channel,
+        horizon=horizon,
+    )
