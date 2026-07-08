@@ -40,13 +40,13 @@ class ColumnDefinition:
 
 # Canonical column definitions for transaction data
 TRANSACTION_COLUMNS_DEF = {
-    "product_id": ColumnDefinition(
-        name="product_id",
+    "item_id": ColumnDefinition(
+        name="item_id",
         data_type="string",
         required=True
     ),
-    "location_id": ColumnDefinition(
-        name="location_id",
+    "store_id": ColumnDefinition(
+        name="store_id",
         data_type="string",
         required=True
     ),
@@ -78,13 +78,13 @@ TRANSACTION_COLUMNS_DEF = {
 
 # Canonical column definitions for lookup data
 LOOKUP_COLUMNS_DEF = {
-    "product_id": ColumnDefinition(
-        name="product_id",
+    "item_id": ColumnDefinition(
+        name="item_id",
         data_type="string",
         required=True
     ),
-    "product_name": ColumnDefinition(
-        name="product_name",
+    "item_name": ColumnDefinition(
+        name="item_name",
         data_type="string",
         required=False
     ),
@@ -98,13 +98,13 @@ LOOKUP_COLUMNS_DEF = {
         data_type="string",
         required=False
     ),
-    "location_id": ColumnDefinition(
-        name="location_id",
+    "store_id": ColumnDefinition(
+        name="store_id",
         data_type="string",
         required=True
     ),
-    "location_name": ColumnDefinition(
-        name="location_name",
+    "store_name": ColumnDefinition(
+        name="store_name",
         data_type="string",
         required=False
     ),

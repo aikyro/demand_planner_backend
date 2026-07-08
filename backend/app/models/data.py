@@ -41,12 +41,12 @@ class DataUpload(Base, UUIDMixin, TimestampMixin):
 class Lookup(Base, UUIDMixin):
     __tablename__ = "lookup"
     company_id: Mapped[str] = mapped_column(String(50))
-    product_id: Mapped[str] = mapped_column(String(120))
-    product_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    item_id: Mapped[str] = mapped_column(String(120))
+    item_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    location_id: Mapped[str] = mapped_column(String(120))
-    location_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    store_id: Mapped[str] = mapped_column(String(120))
+    store_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     state: Mapped[str | None] = mapped_column(String(120), nullable=True)
     region: Mapped[str | None] = mapped_column(String(120), nullable=True)
     channel: Mapped[str | None] = mapped_column(String(120), nullable=True)

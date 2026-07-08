@@ -342,7 +342,7 @@ class ImportEngine:
                             elif pd.isna(val):
                                 val = None
                             entry[user_col] = val
-                    if entry.get("product_id") and entry.get("location_id"):
+                    if entry.get("item_id") and entry.get("store_id"):
                         mapped_entries.append(Lookup(company_id=self.company_id, **entry))
                         
                 for entry_model in mapped_entries:
@@ -357,7 +357,7 @@ class ImportEngine:
                 if not session_id:
                     raise ValueError("session_id is required for importing actuals")
 
-                item_id_col = inverted_mapping.get("product_id") or inverted_mapping.get("item_id")
+                item_id_col = inverted_mapping.get("item_id")
                 date_col = inverted_mapping.get("date")
                 actual_val_col = inverted_mapping.get("actual_quantity") or inverted_mapping.get("actual_value")
 

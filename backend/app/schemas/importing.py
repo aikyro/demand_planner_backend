@@ -2,10 +2,10 @@ from pydantic import BaseModel
 from typing import Any
 
 # Canonical target columns
-TXN_COLUMNS = ["product_id", "location_id", "date", "quantity", "revenue", "price"]
+TXN_COLUMNS = ["item_id", "store_id", "date", "quantity", "revenue", "price"]
 LOOKUP_COLUMNS = [
-    "product_id", "product_name", "category", "brand",
-    "location_id", "location_name", "state", "region", "channel",
+    "item_id", "item_name", "category", "brand",
+    "store_id", "store_name", "state", "region", "channel",
 ]
 
 # M5 Dataset Columns

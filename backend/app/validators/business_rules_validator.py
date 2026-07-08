@@ -337,26 +337,26 @@ class BusinessRulesValidator:
         """Validate reference data exists."""
         errors = []
 
-        # Validate product_id
-        if "product_ids" in reference_data:
-            product_id = row.get("product_id")
-            if product_id and product_id not in reference_data["product_ids"]:
+        # Validate item_id
+        if "item_ids" in reference_data:
+            item_id = row.get("item_id")
+            if item_id and item_id not in reference_data["item_ids"]:
                 errors.append(ErrorClassifier.create_reference_error(
                     row_idx=row_idx,
-                    column_name="product_id",
-                    raw_value=str(product_id),
-                    reference_table="products"
+                    column_name="item_id",
+                    raw_value=str(item_id),
+                    reference_table="items"
                 ))
 
-        # Validate location_id
-        if "location_ids" in reference_data:
-            location_id = row.get("location_id")
-            if location_id and location_id not in reference_data["location_ids"]:
+        # Validate store_id
+        if "store_ids" in reference_data:
+            store_id = row.get("store_id")
+            if store_id and store_id not in reference_data["store_ids"]:
                 errors.append(ErrorClassifier.create_reference_error(
                     row_idx=row_idx,
-                    column_name="location_id",
-                    raw_value=str(location_id),
-                    reference_table="locations"
+                    column_name="store_id",
+                    raw_value=str(store_id),
+                    reference_table="stores"
                 ))
 
         return errors

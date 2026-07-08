@@ -45,7 +45,7 @@ class DataQualityValidator:
         self.missing_value_threshold = missing_value_threshold
         self.duplicate_threshold = duplicate_threshold
         self.outlier_std_dev = outlier_std_dev
-        self.key_columns = key_columns or ["product_id", "location_id", "date"]
+        self.key_columns = key_columns or ["item_id", "store_id", "date"]
 
     def validate_data_quality(
         self,
