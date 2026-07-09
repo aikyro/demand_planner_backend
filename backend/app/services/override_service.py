@@ -107,7 +107,11 @@ class OverrideService:
         fc = await self._forecast(str(ov.forecast_id))
         if fc:
             fc.predictions = ov.override_value
-        await redis_service.invalidate_company(self.company_id)
+        # Selective: only the affected session's dashboards (plus cross-session
+        # aggregates) go stale; other sessions keep their cache.
+        await redis_service.invalidate_session(
+            self.company_id, fc.session_id if fc else None
+        )
 
     async def decide(self, oid: str, approver, approve: bool, comments) -> Override:
         ov = await self._get(oid)

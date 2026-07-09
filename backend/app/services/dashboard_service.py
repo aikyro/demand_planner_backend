@@ -4,7 +4,7 @@ from statistics import mean, pstdev
 from datetime import date as date_cls, timedelta
 from sqlalchemy import select, func, and_, distinct, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import DataUpload, Lookup, Forecast, Actual, ForecastSession, Sales
+from app.models import DataUpload, Lookup, Forecast, Actual, ForecastSession, Sales, Override
 from app.core.redis import redis_client
 from app.core.config import settings
 from app.services import redis_service
@@ -189,6 +189,7 @@ class DashboardService:
         key = redis_service.cache_key(
             self.company_id, "executive",
             json.dumps(cache_filters, sort_keys=True),
+            session_id=session_id,
         )
         cached = await redis_service.get_json(key)
         if cached is not None:
@@ -371,6 +372,7 @@ class DashboardService:
         key = redis_service.cache_key(
             self.company_id, "operational",
             json.dumps(cache_filters, sort_keys=True),
+            session_id=session_id,
         )
         cached = await redis_service.get_json(key)
         if cached is not None:
@@ -490,7 +492,8 @@ class DashboardService:
 
         key = redis_service.cache_key(
             self.company_id, "distribution",
-            f"{dim}:{session_id or 'all'}:{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}"
+            f"{dim}:{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}",
+            session_id=session_id,
         )
         cached = await redis_service.get_json(key)
         if cached is not None:
@@ -622,6 +625,161 @@ class DashboardService:
         await redis_service.set_json(key, result, settings.DASHBOARD_REFERENCE_TTL)
         return result
 
+    # ------------------------------------------------------------------
+    # Product detail (Forecast Editor backing data)
+    # ------------------------------------------------------------------
+    async def product_detail(self, item_id: str, session_id: str | None = None) -> dict:
+        """Metadata + per-date forecast/actual/baseline/override history for one
+        product. Backs GET /dashboard/product/{item_id} (the Forecast Editor).
+
+        When no session is given, the item's most recent session is used so the
+        editor never mixes rows from different forecast runs.
+        """
+        # Resolve the session first so the cache key is precise.
+        if not session_id:
+            session_id = (
+                await self.db.execute(
+                    select(Forecast.session_id)
+                    .where(
+                        Forecast.company_id == self.company_id,
+                        Forecast.item_id == item_id,
+                    )
+                    .order_by(Forecast.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if not session_id:
+            raise ValueError(f"No forecasts found for item '{item_id}'")
+
+        key = redis_service.cache_key(
+            self.company_id, "product", item_id, session_id=session_id
+        )
+        cached = await redis_service.get_json(key)
+        if cached is not None:
+            return cached
+
+        # Forecast rows LEFT JOIN actuals at the (session, item, date) grain.
+        join_on = and_(
+            Forecast.session_id == Actual.session_id,
+            Forecast.company_id == Actual.company_id,
+            Forecast.item_id == Actual.item_id,
+            Forecast.date == Actual.date,
+        )
+        rows = (
+            await self.db.execute(
+                select(
+                    Forecast.id,
+                    Forecast.date,
+                    Forecast.predictions,
+                    Forecast.quantile_0_5,
+                    Forecast.quantile_0_1,
+                    Forecast.quantile_0_9,
+                    Actual.actual_value,
+                )
+                .select_from(Forecast)
+                .outerjoin(Actual, join_on)
+                .where(
+                    Forecast.company_id == self.company_id,
+                    Forecast.session_id == session_id,
+                    Forecast.item_id == item_id,
+                )
+                .order_by(Forecast.date)
+            )
+        ).all()
+        if not rows:
+            raise ValueError(f"No forecasts found for item '{item_id}' in session '{session_id}'")
+
+        # Latest override per forecast row (audit surface for the editor).
+        fids = [r[0] for r in rows]
+        ov_rows = (
+            await self.db.execute(
+                select(Override)
+                .where(
+                    Override.company_id == self.company_id,
+                    Override.forecast_id.in_(fids),
+                )
+                .order_by(Override.created_at.desc())
+            )
+        ).scalars().all()
+        latest_ov: dict = {}
+        for ov in ov_rows:
+            latest_ov.setdefault(str(ov.forecast_id), ov)
+
+        def _f(v):
+            return float(v) if v is not None else None
+
+        history = []
+        sum_abs_err = sum_actual = sum_err = 0.0
+        for fid, d, pred, q5, q1, q9, actual in rows:
+            ov = latest_ov.get(str(fid))
+            if actual is not None and pred is not None:
+                sum_abs_err += abs(float(pred) - float(actual))
+                sum_err += float(pred) - float(actual)
+                sum_actual += float(actual)
+            history.append({
+                "forecast_id": fid,
+                "date": d.isoformat() if d else None,
+                "forecast": _f(pred),
+                "baseline": _f(q5),  # model median = pre-adjustment baseline
+                "lower": _f(q1),
+                "upper": _f(q9),
+                "actual": _f(actual),
+                "override": {
+                    "id": str(ov.id),
+                    "value": float(ov.override_value),
+                    "status": ov.status,
+                    "pct_change": float(ov.pct_change) if ov.pct_change is not None else None,
+                } if ov else None,
+            })
+
+        accuracy = (
+            round(max(0.0, (1 - sum_abs_err / sum_actual) * 100), 2) if sum_actual else None
+        )
+        bias = round(sum_err / sum_actual * 100, 2) if sum_actual else None
+
+        # Dimension metadata from the lookup table (may be absent).
+        lk = (
+            await self.db.execute(
+                select(Lookup).where(
+                    Lookup.company_id == self.company_id,
+                    Lookup.item_id == item_id,
+                ).limit(1)
+            )
+        ).scalars().first()
+
+        result = {
+            "item_id": item_id,
+            "session_id": session_id,
+            "name": (lk.item_name if lk else None) or item_id,
+            "category": lk.category if lk else None,
+            "brand": lk.brand if lk else None,
+            "accuracy": accuracy,
+            "bias": bias,
+            "measured_points": int(sum(1 for h in history if h["actual"] is not None)),
+            "history": history,
+        }
+        await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
+        return result
+
+    async def resolve_forecast_id(
+        self, item_id: str, session_id: str, date: date_cls
+    ) -> str | None:
+        """Map (item, session, date) → forecast row id, company-scoped.
+
+        Used by the per-date override endpoint so the editor can write back
+        without knowing internal forecast ids.
+        """
+        return (
+            await self.db.execute(
+                select(Forecast.id).where(
+                    Forecast.company_id == self.company_id,
+                    Forecast.session_id == session_id,
+                    Forecast.item_id == item_id,
+                    Forecast.date == date,
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def registry(
         self,
         item_ids: list[str] | None = None,
@@ -639,8 +797,6 @@ class DashboardService:
         page_size: int = 50,
         horizon: str | None = None,
     ) -> dict:
-        import random
-        random.seed(42)
         op_data = await self.operational_metrics(
             item_ids=item_ids,
             date_from=date_from,
@@ -657,48 +813,193 @@ class DashboardService:
             page_size=page_size,
             horizon=horizon,
         )
+        page_items = [i["item_id"] for i in op_data["items"] if i["item_id"]]
+
+        # Real per-item enrichment for the current page (3 cheap grouped queries).
+        lookup_meta: dict[str, tuple[str | None, str | None]] = {}
+        fc_stats: dict[str, dict] = {}
+        if page_items:
+            for iid, name, cat in (
+                await self.db.execute(
+                    select(Lookup.item_id, Lookup.item_name, Lookup.category)
+                    .where(
+                        Lookup.company_id == self.company_id,
+                        Lookup.item_id.in_(page_items),
+                    )
+                )
+            ).all():
+                lookup_meta.setdefault(iid, (name, cat))
+
+            # Confidence from prediction-interval tightness; trend from the
+            # second-half vs first-half average of predictions.
+            fc = self._forecast_conds(page_items, date_from, date_to, session_id)
+            mid = (
+                await self.db.execute(
+                    select(
+                        func.min(Forecast.date), func.max(Forecast.date)
+                    ).where(and_(*fc))
+                )
+            ).one()
+            midpoint = None
+            if mid[0] and mid[1]:
+                midpoint = mid[0] + (mid[1] - mid[0]) / 2
+            rows = (
+                await self.db.execute(
+                    select(
+                        Forecast.item_id,
+                        func.avg(
+                            (Forecast.quantile_0_9 - Forecast.quantile_0_1)
+                            / func.nullif(Forecast.predictions, 0)
+                        ),
+                        func.avg(Forecast.predictions).filter(Forecast.date < midpoint) if midpoint else func.avg(Forecast.predictions),
+                        func.avg(Forecast.predictions).filter(Forecast.date >= midpoint) if midpoint else func.avg(Forecast.predictions),
+                    ).where(and_(*fc)).group_by(Forecast.item_id)
+                )
+            ).all()
+            for iid, spread, first_half, second_half in rows:
+                spread = float(spread) if spread is not None else None
+                # Tight interval (spread→0) = high confidence; spread of 100%
+                # of the prediction = 50; clamp to [0, 100].
+                confidence = (
+                    round(max(0.0, min(100.0, 100.0 * (1 - spread / 2)))) if spread is not None else None
+                )
+                trend = None
+                if first_half and float(first_half):
+                    trend = round(
+                        (float(second_half or 0) - float(first_half)) / float(first_half) * 100, 1
+                    )
+                fc_stats[iid] = {"confidence": confidence, "trend": trend}
+
+        # Cumulative-share ABC (consistent with the segmentation endpoint).
+        abc = await self._abc_segments(category, brand, state, store, channel)
 
         registry_items = []
         for item in op_data["items"]:
-            vol = item["actual_total"]
-            if vol > 5000:
-                seg = "A"
-            elif vol > 1000:
-                seg = "B"
-            else:
-                seg = "C"
-                
+            iid = item["item_id"]
             acc = item["accuracy"]
             if acc is None:
-                status = "Review"
+                status_label = "Review"
             elif acc > 80:
-                status = "Approved"
+                status_label = "Approved"
             elif acc > 50:
-                status = "Review"
+                status_label = "Review"
             else:
-                status = "At Risk"
-                
+                status_label = "At Risk"
+            name, cat = lookup_meta.get(iid, (None, None))
+            stats = fc_stats.get(iid, {})
             registry_items.append({
-                "id": item["item_id"],
-                "sku": item["item_id"],
-                "name": item["item_id"],
-                "category": category or "Category",
-                "segment": seg,
-                "status": status,
+                "id": iid,
+                "sku": iid,
+                "name": name or iid,
+                "category": cat or (category if category and category != "All" else "—"),
+                "segment": abc["by_item"].get(iid, "C"),
+                "status": status_label,
                 "accuracy": item["accuracy"],
                 "bias": item["bias"],
                 "volume": item["actual_total"],
-                "confidence": random.randint(40, 95),
-                "trend": random.randint(-15, 20),
-                "agents": ["A1", "A2"] if random.random() > 0.5 else ["A1"]
+                "confidence": stats.get("confidence"),
+                "trend": stats.get("trend"),
+                # No per-item agent assignments exist in the data model yet.
+                "agents": [],
             })
-            
+
         return {
             "items": registry_items,
             "total": op_data["total"],
             "page": op_data["page"],
             "page_size": op_data["page_size"]
         }
+
+    def _sales_stmt_filters(self, stmt, category, brand, state, store, channel):
+        """Apply dimension filters to a Sales query. cat/store/state live on
+        the sales table itself; brand/channel resolve through the lookup table."""
+        if category and category != "All":
+            stmt = stmt.where(Sales.cat_id == category)
+        if store and store != "All":
+            stmt = stmt.where(Sales.store_id == store)
+        if state and state != "All":
+            stmt = stmt.where(Sales.state_id == state)
+        lookup_conds = []
+        if brand and brand != "All":
+            lookup_conds.append(Lookup.brand == brand)
+        if channel and channel != "All":
+            lookup_conds.append(Lookup.channel == channel)
+        if lookup_conds:
+            stmt = stmt.where(
+                select(1).select_from(Lookup).where(and_(
+                    Lookup.company_id == Sales.company_id,
+                    Lookup.item_id == Sales.item_id,
+                    *lookup_conds,
+                )).exists()
+            )
+        return stmt
+
+    async def _abc_segments(
+        self,
+        category: str | None = None,
+        brand: str | None = None,
+        state: str | None = None,
+        store: str | None = None,
+        channel: str | None = None,
+    ) -> dict:
+        """Cumulative-share ABC classification over the sales table.
+
+        A ≤ 80% of cumulative volume, B ≤ 95%, C above. Cached per company +
+        dimension filters; shared by the registry and segmentation endpoints so
+        both report the same segment for an item.
+        """
+        key = redis_service.cache_key(
+            self.company_id, "abc",
+            f"{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}",
+        )
+        cached = await redis_service.get_json(key)
+        if cached is not None:
+            return cached
+
+        stmt = select(
+            Sales.item_id, func.sum(Sales.sales).label("total_sales")
+        ).where(Sales.company_id == self.company_id)
+        stmt = self._sales_stmt_filters(stmt, category, brand, state, store, channel)
+        stmt = stmt.group_by(Sales.item_id).order_by(text("total_sales DESC"))
+        rows = (await self.db.execute(stmt)).all()
+
+        total_vol = float(sum(float(r.total_sales or 0) for r in rows)) or 1.0
+        by_item: dict[str, str] = {}
+        agg = {"A": [0, 0.0], "B": [0, 0.0], "C": [0, 0.0]}  # count, volume
+        cum = 0.0
+        for r in rows:
+            v = float(r.total_sales or 0)
+            cum += v
+            seg = "A" if cum / total_vol <= 0.8 else ("B" if cum / total_vol <= 0.95 else "C")
+            by_item[r.item_id] = seg
+            agg[seg][0] += 1
+            agg[seg][1] += v
+
+        # Rows are volume-ranked: the top 20% of items' true contribution.
+        top_n = max(1, round(len(rows) * 0.2)) if rows else 0
+        top20_share = (
+            sum(float(r.total_sales or 0) for r in rows[:top_n]) / total_vol * 100
+            if rows else 0.0
+        )
+
+        result = {
+            "by_item": by_item,
+            "total_volume": total_vol,
+            "item_count": len(rows),
+            "top20_count": top_n,
+            "top20_share": round(top20_share, 2),
+            "segments": [
+                {
+                    "segment": s,
+                    "products": agg[s][0],
+                    "volume": agg[s][1],
+                    "pctTotal": agg[s][1] / total_vol * 100,
+                }
+                for s in ("A", "B", "C")
+            ],
+        }
+        await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
+        return result
 
     async def segmentation(
         self,
@@ -713,73 +1014,47 @@ class DashboardService:
         channel: str | None = None,
         horizon: str | None = None,
     ) -> dict:
-        stmt = select(
+        """ABC segmentation + demand volatility from the sales table.
+
+        Note: sales is company-level upload data (not session-scoped), so
+        session/date/horizon params are accepted for interface symmetry but do
+        not constrain this dataset.
+        """
+        key = redis_service.cache_key(
+            self.company_id, "segmentation",
+            f"{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}",
+        )
+        cached = await redis_service.get_json(key)
+        if cached is not None:
+            return cached
+
+        abc = await self._abc_segments(category, brand, state, store, channel)
+
+        # Real demand volatility: per-item coefficient of variation (CV =
+        # stddev/mean of per-record sales). easy: CV ≤ 0.5; challenging: CV > 1.
+        cv_stmt = select(
             Sales.item_id,
-            func.sum(Sales.sales).label('total_sales')
+            (func.stddev_samp(Sales.sales) / func.nullif(func.avg(Sales.sales), 0)).label("cv"),
         ).where(Sales.company_id == self.company_id)
-        
-        if category and category != "All":
-            stmt = stmt.where(Sales.cat_id == category)
-        if store and store != "All":
-            stmt = stmt.where(Sales.store_id == store)
-        if state and state != "All":
-            stmt = stmt.where(Sales.state_id == state)
-        
-        stmt = stmt.group_by(Sales.item_id).order_by(text('total_sales DESC'))
-        
-        rows = (await self.db.execute(stmt)).all()
-        
-        total_vol = sum((r.total_sales or 0) for r in rows)
-        if total_vol == 0:
-            total_vol = 1
-            
-        a_vol, b_vol, c_vol = 0, 0, 0
-        a_count, b_count, c_count = 0, 0, 0
-        
-        cum_vol = 0
-        for r in rows:
-            v = r.total_sales or 0
-            cum_vol += v
-            pct = cum_vol / total_vol
-            if pct <= 0.8:
-                a_vol += v
-                a_count += 1
-            elif pct <= 0.95:
-                b_vol += v
-                b_count += 1
-            else:
-                c_vol += v
-                c_count += 1
-                
-        return {
-            "segments": [
-                {
-                    "segment": "A",
-                    "products": a_count,
-                    "volume": a_vol,
-                    "pctTotal": (a_vol / total_vol) * 100
-                },
-                {
-                    "segment": "B",
-                    "products": b_count,
-                    "volume": b_vol,
-                    "pctTotal": (b_vol / total_vol) * 100
-                },
-                {
-                    "segment": "C",
-                    "products": c_count,
-                    "volume": c_vol,
-                    "pctTotal": (c_vol / total_vol) * 100
-                }
-            ],
-            "volatility": {
-                "easy": a_count,
-                "challenging": c_count,
-                "avgCv": 0.45,
-                "highVolPct": 12.5
-            },
-            "pareto": {
-                "top20Products": max(1, int(len(rows) * 0.2)),
-                "top20Contribution": (a_vol / total_vol) * 100 if total_vol > 0 else 0
-            }
+        cv_stmt = self._sales_stmt_filters(cv_stmt, category, brand, state, store, channel)
+        cv_stmt = cv_stmt.group_by(Sales.item_id)
+        cv_rows = [float(r.cv) for r in (await self.db.execute(cv_stmt)).all() if r.cv is not None]
+
+        n_cv = len(cv_rows)
+        volatility = {
+            "easy": sum(1 for c in cv_rows if c <= 0.5),
+            "challenging": sum(1 for c in cv_rows if c > 1.0),
+            "avgCv": round(mean(cv_rows), 2) if cv_rows else None,
+            "highVolPct": round(sum(1 for c in cv_rows if c > 1.0) / n_cv * 100, 1) if n_cv else None,
         }
+
+        result = {
+            "segments": abc["segments"],
+            "volatility": volatility,
+            "pareto": {
+                "top20Products": abc["top20_count"],
+                "top20Contribution": abc["top20_share"],
+            },
+        }
+        await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
+        return result

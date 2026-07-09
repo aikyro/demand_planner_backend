@@ -58,6 +58,44 @@ class DistributionOut(BaseModel):
     bottom_products: list[ProductVolume]
 
 
+class HistoryOverride(BaseModel):
+    id: str
+    value: float
+    status: str
+    pct_change: float | None
+
+
+class ProductHistoryPoint(BaseModel):
+    forecast_id: str
+    date: str | None
+    forecast: float | None
+    baseline: float | None  # model median (quantile_0_5), pre-adjustment
+    lower: float | None
+    upper: float | None
+    actual: float | None
+    override: HistoryOverride | None = None
+
+
+class ProductDetailOut(BaseModel):
+    item_id: str
+    session_id: str
+    name: str
+    category: str | None
+    brand: str | None
+    accuracy: float | None
+    bias: float | None
+    measured_points: int
+    history: list[ProductHistoryPoint]
+
+
+class ProductOverrideIn(BaseModel):
+    item_id: str
+    session_id: str
+    date: str  # ISO yyyy-mm-dd
+    override_value: float
+    reason: str | None = None
+
+
 class ItemMetric(BaseModel):
     item_id: str | None
     points: int

@@ -89,6 +89,6 @@ async def publish(session_id: str, user: CurrentUser = Depends(min_role("planner
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
     await db.commit()
-    # Newly published data changes every dashboard aggregate — drop the company cache.
-    await redis_service.invalidate_company(user.company_id)
+    # Newly published session: drop its cache slice + cross-session aggregates.
+    await redis_service.invalidate_session(user.company_id, session_id)
     return _sess_out(s)
