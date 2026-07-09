@@ -93,6 +93,60 @@ class ForecastService:
         await self.db.flush()
         return sess
 
+    async def set_status(
+        self,
+        session_id: str,
+        user_id: str,
+        new_status: str,
+        notes: str | None,
+    ) -> ForecastSession:
+        """Flip a session to ``new_status`` and merge an optional user note.
+
+        Status transitions:
+          - new_status == "published" sets ``published_at`` if not already set
+            (we never null out the first-publish timestamp on draft flips).
+          - new_status == "draft" is always allowed and is itself a valid state.
+
+        Note handling:
+          - ``notes is None``      → leave any existing user_notes untouched.
+          - ``notes.strip() == ""`` → drop the user_notes key (clear).
+          - otherwise              → store under meta["user_notes"].
+
+        An ``ApprovalHistory`` row is written with action="status_change" so
+        the audit log distinguishes manual flips from the publish() flow.
+        """
+        sess = await self.get_session(session_id)
+        if not sess:
+            raise ValueError("Session not found")
+
+        old_status = sess.status
+        sess.status = new_status
+
+        if new_status == "published" and sess.published_at is None:
+            sess.published_at = datetime.now(timezone.utc)
+
+        # Merge user note into the JSON notes blob without overwriting other keys.
+        meta = session_meta(sess)
+        if notes is not None:
+            stripped = notes.strip()
+            if stripped:
+                meta["user_notes"] = stripped
+            else:
+                meta.pop("user_notes", None)
+            sess.notes = json.dumps(meta) if meta else None
+
+        # old_value/new_value are JSONB dicts on ApprovalHistory — wrap the
+        # status as {"status": "..."} so the audit log stays self-describing.
+        self.db.add(ApprovalHistory(
+            company_id=self.company_id, entity_type="forecast",
+            entity_id=session_id, action="status_change", user_id=user_id,
+            old_value={"status": old_status},
+            new_value={"status": new_status},
+            comments=notes.strip() if notes and notes.strip() else None,
+        ))
+        await self.db.flush()
+        return sess
+
     async def mark_generated(self, session_id: str, summary: dict):
         sess = await self.get_session(session_id)
         if not sess:
