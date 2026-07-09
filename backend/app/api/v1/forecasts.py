@@ -4,7 +4,7 @@ from app.db.session import get_db
 from app.core.deps import get_current_user, min_role, CurrentUser
 from app.core import job_status
 from app.schemas.forecasts import (
-    GenerateIn, GenerateOut, SessionOut, StatusOut, ForecastRowOut,
+    GenerateIn, GenerateOut, SessionOut, StatusOut, ForecastRowOut, SetStatusIn,
 )
 from app.services.forecast_service import ForecastService, session_meta
 from app.services import redis_service
@@ -23,6 +23,9 @@ def _sess_out(s) -> SessionOut:
         metrics=meta.get("metrics"), generated_at=meta.get("generated_at"),
         created_at=s.created_at.isoformat() if s.created_at else None,
         published_at=s.published_at.isoformat() if s.published_at else None,
+        # Surface the user-entered note (stored under meta.user_notes) so the
+        # frontend can pre-fill the change-status modal without a second GET.
+        notes=meta.get("user_notes"),
     )
 
 
@@ -90,5 +93,27 @@ async def publish(session_id: str, user: CurrentUser = Depends(min_role("planner
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
     await db.commit()
     # Newly published data changes every dashboard aggregate — drop the company cache.
+    await redis_service.invalidate_company(user.company_id)
+    return _sess_out(s)
+
+
+@router.post("/sessions/{session_id}/status", response_model=SessionOut)
+async def set_session_status(
+    session_id: str,
+    body: SetStatusIn,
+    user: CurrentUser = Depends(min_role("planner")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Flip a session between ``draft`` and ``published`` and persist a free-text
+    user note. Mirrors the auth/cache-invalidation pattern of ``publish`` above
+    because the same downstream dashboards depend on the status column.
+    """
+    try:
+        s = await ForecastService(db, user.company_id).set_status(
+            session_id, user.id, body.status, body.notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
+    await db.commit()
     await redis_service.invalidate_company(user.company_id)
     return _sess_out(s)
