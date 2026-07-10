@@ -86,7 +86,11 @@ services:
     ports:
       - "${ADK_PORT:-9000}:9000"
     volumes:
-      - adk_artifacts:/app/.adk/artifacts
+      # Mount ADK source code directory (for hot-reload of code changes)
+      - ../demand_forecasting_adk/demand_forecasting_agent:/app/demand_forecasting_agent
+      - ../demand_forecasting_adk/server.py:/app/server.py
+      # Artifacts and output directories
+      - ../demand_forecasting_adk/.adk/artifacts:/app/.adk/artifacts
       - ../demand_forecasting_adk/generated_forecast:/app/generated_forecast
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"]
@@ -112,7 +116,4 @@ networks:
 # =============================================================================
 # Volumes (Persistent Data)
 # =============================================================================
-volumes:
-  adk_artifacts:
-    driver: local
-    name: demand-planner-adk-artifacts
+# Artifacts are now mounted from local folder, no named volume needed

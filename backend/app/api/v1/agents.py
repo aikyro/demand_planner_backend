@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.core.deps import get_current_user, CurrentUser
 from app.services.metrics_service import MetricsService, AgentService
 from app.core.redis import redis_client
+from app.core.config import settings
 import app.adk_client as adk_client
 
 router = APIRouter(tags=["agents"])
@@ -189,7 +190,7 @@ async def stream_agent_chat(
         async with httpx.AsyncClient(timeout=1800.0) as client:
             async with client.stream(
                 "POST",
-                f"http://localhost:9000/run/stream",
+                f"{settings.ADK_URL}/run/stream",
                 json=payload,
                 headers=headers,
             ) as resp:
