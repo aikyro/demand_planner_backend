@@ -116,8 +116,9 @@ class ActualsService:
         if rows:
             await self.db.execute(Actual.__table__.insert(), rows)
             await self.db.commit()
-            # New actuals change every accuracy figure — drop the company cache.
-            await redis_service.invalidate_company(self.company_id)
+            # New actuals change accuracy figures for this session (and the
+            # cross-session aggregates) — leave other sessions cached.
+            await redis_service.invalidate_session(self.company_id, session_id)
 
         return {
             "uploaded": len(rows),

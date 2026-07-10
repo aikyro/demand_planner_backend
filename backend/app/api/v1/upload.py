@@ -726,8 +726,9 @@ async def delete_upload(
             elif "actuals" in fn:
                 source_type = "actuals"
 
-    # 2. Clear target tables if category matches
-    if source_type:
+    # 2. Clear target tables if category matches and the upload completed successfully (actually imported data)
+    is_completed = record and getattr(record, "status", None) == "completed"
+    if source_type and is_completed:
         source_type_lower = source_type.lower()
         if source_type_lower == "calendar":
             from app.models import Calendar
@@ -753,11 +754,61 @@ async def delete_upload(
             from app.models import Actual
             session_id = meta.get("session_id")
             if session_id:
-                logger.info(f"Clearing Actual records for session {session_id} and company {user.company_id}")
-                await db.execute(delete(Actual).where(Actual.company_id == user.company_id, Actual.session_id == session_id))
+                # Count other completed actuals uploads for this session to avoid data loss
+                other_uploads_result = await db.execute(
+                    select(UploadProgress).where(
+                        UploadProgress.company_id == user.company_id,
+                        UploadProgress.status == "completed",
+                        UploadProgress.id != upload_id
+                    )
+                )
+                other_completed_count = 0
+                for other_up in other_uploads_result.scalars().all():
+                    other_meta = getattr(other_up, "meta_info", None) or {}
+                    if (
+                        other_meta.get("source_type") == "actuals"
+                        and other_meta.get("session_id") == session_id
+                    ):
+                        other_completed_count += 1
+
+                if other_completed_count == 0:
+                    logger.info(
+                        f"Clearing Actual records for session {session_id} and company {user.company_id} "
+                        f"(no other completed actuals uploads exist for this session)"
+                    )
+                    await db.execute(
+                        delete(Actual).where(
+                            Actual.company_id == user.company_id,
+                            Actual.session_id == session_id,
+                        )
+                    )
+                else:
+                    logger.info(
+                        f"Skipping Actual table clearing for session {session_id} and company {user.company_id} "
+                        f"because {other_completed_count} other completed actuals upload(s) exist for this session"
+                    )
             else:
-                logger.info(f"Clearing all Actual records for company {user.company_id}")
-                await db.execute(delete(Actual).where(Actual.company_id == user.company_id))
+                # No session_id available: only clear company-wide actuals when no other
+                # completed actuals upload records exist, to be conservative.
+                other_company_uploads = await db.execute(
+                    select(UploadProgress).where(
+                        UploadProgress.company_id == user.company_id,
+                        UploadProgress.status == "completed",
+                        UploadProgress.id != upload_id,
+                    )
+                )
+                has_other_actuals_upload = any(
+                    (getattr(up, "meta_info", None) or {}).get("source_type") == "actuals"
+                    for up in other_company_uploads.scalars().all()
+                )
+                if has_other_actuals_upload:
+                    logger.info(
+                        f"Skipping company-wide Actual table clearing for company {user.company_id} "
+                        f"because other completed actuals upload(s) exist"
+                    )
+                else:
+                    logger.info(f"Clearing all Actual records for company {user.company_id}")
+                    await db.execute(delete(Actual).where(Actual.company_id == user.company_id))
 
     # 3. Clean up the tracking records
     await db.execute(delete(DataUpload).where(DataUpload.id == upload_id, DataUpload.company_id == user.company_id))
