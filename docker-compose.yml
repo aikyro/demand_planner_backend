@@ -26,7 +26,7 @@ services:
       # Explicit mount for temp uploads (ensure sync on Windows)
       - ./backend/tmp:/app/tmp
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -78,16 +78,16 @@ services:
   # =============================================================================
   adk-service:
     build:
-      context: ../Demand_forcasting_adk
+      context: ../demand_forecasting_adk
       dockerfile: Dockerfile
     container_name: demand-planner-adk
     env_file:
-      - ../Demand_forcasting_adk/demand_forecasting_agent/.env
+      - ../demand_forecasting_adk/demand_forecasting_agent/.env
     ports:
       - "${ADK_PORT:-9000}:9000"
     volumes:
       - adk_artifacts:/app/.adk/artifacts
-      - ../Demand_forcasting_adk/generated_forecast:/app/generated_forecast
+      - ../demand_forecasting_adk/generated_forecast:/app/generated_forecast
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"]
       interval: 30s
