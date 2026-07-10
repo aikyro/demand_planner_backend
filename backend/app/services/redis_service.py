@@ -56,6 +56,25 @@ async def get_json(key: str) -> Any | None:
         return None
 
 
+async def get_json_with_flag(key: str) -> tuple[Any, bool]:
+    """Like get_json(), but also returns whether the key was a cache HIT.
+
+    Returns:
+        (None, False) on MISS or poisoned entry.
+        (parsed_value, True) on HIT.
+    """
+    raw = await redis_client.get(key)
+    if raw is None:
+        return None, False
+    try:
+        return json.loads(raw), True
+    except (ValueError, TypeError):
+        # Poisoned entry — drop it so the caller recomputes.
+        await redis_client.delete(key)
+        return None, False
+
+
+
 async def set_json(key: str, value: Any, ttl: int = OPERATIONAL_TTL) -> None:
     """Store ``value`` as JSON under ``key`` with an expiry."""
     await redis_client.setex(key, ttl, json.dumps(value, default=str))

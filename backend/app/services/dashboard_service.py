@@ -4,7 +4,7 @@ from statistics import mean, pstdev
 from datetime import date as date_cls, timedelta
 from sqlalchemy import select, func, and_, distinct, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import DataUpload, Lookup, Forecast, Actual, ForecastSession, Sales, Override
+from app.models import DataUpload, Lookup, Forecast, Actual, ForecastSession, Sales, Override, ModelingData
 from app.core.redis import redis_client
 from app.core.config import settings
 from app.services import redis_service
@@ -49,11 +49,11 @@ class DashboardService:
                 return False
         return True
 
-    async def kpis(self, filters: dict) -> dict:
+    async def kpis(self, filters: dict) -> tuple[dict, bool]:
         cache_key = f"kpis:{self.company_id}:{json.dumps(filters, sort_keys=True)}"
-        cached = await redis_client.get(cache_key)
-        if cached:
-            return json.loads(cached)
+        cached, hit = await redis_service.get_json_with_flag(cache_key)
+        if cached is not None:
+            return cached, hit
 
         rows = await self._all_rows()
         lookup = await self._lookup()
@@ -85,9 +85,9 @@ class DashboardService:
             ],
         }
         await redis_client.setex(cache_key, settings.KPI_CACHE_TTL, json.dumps(result))
-        return result
+        return result, False
 
-    async def filters(self) -> dict:
+    async def filters(self) -> tuple[dict, bool]:
         lookup = await self._lookup()
         def uniq(attr):
             return sorted({getattr(l, attr) for l in lookup if getattr(l, attr)})
@@ -98,7 +98,7 @@ class DashboardService:
             "region": uniq("region"),
             "channel": uniq("channel"),
             "location_id": uniq("store_id"),
-        }
+        }, False
 
     def _apply_lookup_filters(
         self,
@@ -173,7 +173,7 @@ class DashboardService:
         store: str | None = None,
         channel: str | None = None,
         horizon: str | None = None,
-    ) -> dict:
+    ) -> tuple[dict, bool]:
         cache_filters = {
             "item_ids": sorted(item_ids) if item_ids else None,
             "date_from": date_from.isoformat() if date_from else None,
@@ -191,9 +191,9 @@ class DashboardService:
             json.dumps(cache_filters, sort_keys=True),
             session_id=session_id,
         )
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
         if horizon:
             horizon_map = {"L4": 28, "L13": 91, "L26": 182, "L52": 364}
@@ -328,7 +328,7 @@ class DashboardService:
             "recent_sessions": recent,
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
-        return result
+        return result, False
 
     async def operational_metrics(
         self,
@@ -346,7 +346,7 @@ class DashboardService:
         page: int = 1,
         page_size: int = 50,
         horizon: str | None = None,
-    ) -> dict:
+    ) -> tuple[dict, bool]:
         """Per-item performance metrics (accuracy / MAPE / bias) from forecasts ⋈ actuals.
 
         Only items that have matching actuals are measurable, so the table is
@@ -374,9 +374,9 @@ class DashboardService:
             json.dumps(cache_filters, sort_keys=True),
             session_id=session_id,
         )
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
         if horizon:
             horizon_map = {"L4": 28, "L13": 91, "L26": 182, "L52": 364}
@@ -468,7 +468,7 @@ class DashboardService:
             "summary": summary,
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
-        return result
+        return result, False
 
     # Whitelisted modeling_data dimension columns for distribution queries.
     # These columns are created by the ADK, not declared on the ORM model,
@@ -484,7 +484,7 @@ class DashboardService:
         state: str | None = None,
         store: str | None = None,
         channel: str | None = None,
-    ) -> dict:
+    ) -> tuple[dict, bool]:
         """Sales-volume share by a modeling_data dimension + Pareto stats +
         top/bottom products. Feeds the executive distribution/Pareto cards."""
         if dim not in self.DISTRIBUTION_DIMS:
@@ -495,9 +495,9 @@ class DashboardService:
             f"{dim}:{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}",
             session_id=session_id,
         )
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
         sess_clause = "AND session_id = :session_id" if session_id else ""
         params: dict = {"company_id": self.company_id}
@@ -587,14 +587,14 @@ class DashboardService:
             "bottom_products": [product(r) for r in item_rows[-5:][::-1]] if item_rows else [],
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
-        return result
+        return result, False
 
-    async def executive_filter_options(self) -> dict:
+    async def executive_filter_options(self) -> tuple[dict, bool]:
         """Distinct item_ids + recent sessions for dashboard filter dropdowns."""
         key = redis_service.cache_key(self.company_id, "filter_options")
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
         item_ids = (
             await self.db.execute(
@@ -623,12 +623,12 @@ class DashboardService:
             ],
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_REFERENCE_TTL)
-        return result
+        return result, False
 
     # ------------------------------------------------------------------
     # Product detail (Forecast Editor backing data)
     # ------------------------------------------------------------------
-    async def product_detail(self, item_id: str, session_id: str | None = None) -> dict:
+    async def product_detail(self, item_id: str, session_id: str | None = None) -> tuple[dict, bool]:
         """Metadata + per-date forecast/actual/baseline/override history for one
         product. Backs GET /dashboard/product/{item_id} (the Forecast Editor).
 
@@ -654,9 +654,9 @@ class DashboardService:
         key = redis_service.cache_key(
             self.company_id, "product", item_id, session_id=session_id
         )
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
         # Forecast rows LEFT JOIN actuals at the (session, item, date) grain.
         join_on = and_(
@@ -759,17 +759,17 @@ class DashboardService:
             "history": history,
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
-        return result
+        return result, False
 
     async def resolve_forecast_id(
         self, item_id: str, session_id: str, date: date_cls
-    ) -> str | None:
+    ) -> tuple[str | None, bool]:
         """Map (item, session, date) → forecast row id, company-scoped.
 
         Used by the per-date override endpoint so the editor can write back
         without knowing internal forecast ids.
         """
-        return (
+        val = (
             await self.db.execute(
                 select(Forecast.id).where(
                     Forecast.company_id == self.company_id,
@@ -779,6 +779,7 @@ class DashboardService:
                 ).limit(1)
             )
         ).scalar_one_or_none()
+        return val, False
 
     async def registry(
         self,
@@ -796,8 +797,8 @@ class DashboardService:
         page: int = 1,
         page_size: int = 50,
         horizon: str | None = None,
-    ) -> dict:
-        op_data = await self.operational_metrics(
+    ) -> tuple[dict, bool]:
+        op_data, op_hit = await self.operational_metrics(
             item_ids=item_ids,
             date_from=date_from,
             date_to=date_to,
@@ -871,7 +872,7 @@ class DashboardService:
                 fc_stats[iid] = {"confidence": confidence, "trend": trend}
 
         # Cumulative-share ABC (consistent with the segmentation endpoint).
-        abc = await self._abc_segments(category, brand, state, store, channel)
+        abc, abc_hit = await self._abc_segments(category, brand, state, store, channel, session_id=session_id)
 
         registry_items = []
         for item in op_data["items"]:
@@ -908,7 +909,7 @@ class DashboardService:
             "total": op_data["total"],
             "page": op_data["page"],
             "page_size": op_data["page_size"]
-        }
+        }, False
 
     def _sales_stmt_filters(self, stmt, category, brand, state, store, channel):
         """Apply dimension filters to a Sales query. cat/store/state live on
@@ -941,8 +942,9 @@ class DashboardService:
         state: str | None = None,
         store: str | None = None,
         channel: str | None = None,
-    ) -> dict:
-        """Cumulative-share ABC classification over the sales table.
+        session_id: str | None = None,
+    ) -> tuple[dict, bool]:
+        """Cumulative-share ABC classification over the sales/modeling_data table.
 
         A ≤ 80% of cumulative volume, B ≤ 95%, C above. Cached per company +
         dimension filters; shared by the registry and segmentation endpoints so
@@ -951,16 +953,56 @@ class DashboardService:
         key = redis_service.cache_key(
             self.company_id, "abc",
             f"{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}",
+            session_id=session_id,
         )
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
-        stmt = select(
-            Sales.item_id, func.sum(Sales.sales).label("total_sales")
-        ).where(Sales.company_id == self.company_id)
-        stmt = self._sales_stmt_filters(stmt, category, brand, state, store, channel)
-        stmt = stmt.group_by(Sales.item_id).order_by(text("total_sales DESC"))
+        if session_id:
+            stmt = select(
+                ModelingData.item_id, func.sum(ModelingData.sales).label("total_sales")
+            ).where(
+                and_(
+                    ModelingData.company_id == self.company_id,
+                    ModelingData.session_id == session_id,
+                    ModelingData.item_id.in_(
+                        select(Forecast.item_id).where(
+                            and_(
+                                Forecast.company_id == self.company_id,
+                                Forecast.session_id == session_id,
+                            )
+                        )
+                    )
+                )
+            )
+            if category and category != "All":
+                stmt = stmt.where(ModelingData.cat_id == category)
+            if store and store != "All":
+                stmt = stmt.where(ModelingData.store_id == store)
+            if state and state != "All":
+                stmt = stmt.where(ModelingData.state_id == state)
+            
+            lookup_conds = []
+            if brand and brand != "All":
+                lookup_conds.append(Lookup.brand == brand)
+            if channel and channel != "All":
+                lookup_conds.append(Lookup.channel == channel)
+            if lookup_conds:
+                stmt = stmt.where(
+                    select(1).select_from(Lookup).where(and_(
+                        Lookup.company_id == ModelingData.company_id,
+                        Lookup.item_id == ModelingData.item_id,
+                        *lookup_conds,
+                    )).exists()
+                )
+            stmt = stmt.group_by(ModelingData.item_id).order_by(text("total_sales DESC"))
+        else:
+            stmt = select(
+                Sales.item_id, func.sum(Sales.sales).label("total_sales")
+            ).where(Sales.company_id == self.company_id)
+            stmt = self._sales_stmt_filters(stmt, category, brand, state, store, channel)
+            stmt = stmt.group_by(Sales.item_id).order_by(text("total_sales DESC"))
         rows = (await self.db.execute(stmt)).all()
 
         total_vol = float(sum(float(r.total_sales or 0) for r in rows)) or 1.0
@@ -999,7 +1041,7 @@ class DashboardService:
             ],
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
-        return result
+        return result, False
 
     async def segmentation(
         self,
@@ -1013,31 +1055,71 @@ class DashboardService:
         store: str | None = None,
         channel: str | None = None,
         horizon: str | None = None,
-    ) -> dict:
-        """ABC segmentation + demand volatility from the sales table.
+    ) -> tuple[dict, bool]:
+        """ABC segmentation + demand volatility from the modeling_data / sales table.
 
-        Note: sales is company-level upload data (not session-scoped), so
-        session/date/horizon params are accepted for interface symmetry but do
-        not constrain this dataset.
+        Note: sales is company-level upload data (not session-scoped), but when
+        session_id is provided, modeling_data is used to constrain to that session.
         """
         key = redis_service.cache_key(
             self.company_id, "segmentation",
             f"{category or ''}:{brand or ''}:{state or ''}:{store or ''}:{channel or ''}",
+            session_id=session_id,
         )
-        cached = await redis_service.get_json(key)
+        cached, hit = await redis_service.get_json_with_flag(key)
         if cached is not None:
-            return cached
+            return cached, hit
 
-        abc = await self._abc_segments(category, brand, state, store, channel)
+        abc, abc_hit = await self._abc_segments(category, brand, state, store, channel, session_id=session_id)
 
         # Real demand volatility: per-item coefficient of variation (CV =
         # stddev/mean of per-record sales). easy: CV ≤ 0.5; challenging: CV > 1.
-        cv_stmt = select(
-            Sales.item_id,
-            (func.stddev_samp(Sales.sales) / func.nullif(func.avg(Sales.sales), 0)).label("cv"),
-        ).where(Sales.company_id == self.company_id)
-        cv_stmt = self._sales_stmt_filters(cv_stmt, category, brand, state, store, channel)
-        cv_stmt = cv_stmt.group_by(Sales.item_id)
+        if session_id:
+            cv_stmt = select(
+                ModelingData.item_id,
+                (func.stddev_samp(ModelingData.sales) / func.nullif(func.avg(ModelingData.sales), 0)).label("cv"),
+            ).where(
+                and_(
+                    ModelingData.company_id == self.company_id,
+                    ModelingData.session_id == session_id,
+                    ModelingData.item_id.in_(
+                        select(Forecast.item_id).where(
+                            and_(
+                                Forecast.company_id == self.company_id,
+                                Forecast.session_id == session_id,
+                            )
+                        )
+                    )
+                )
+            )
+            if category and category != "All":
+                cv_stmt = cv_stmt.where(ModelingData.cat_id == category)
+            if store and store != "All":
+                cv_stmt = cv_stmt.where(ModelingData.store_id == store)
+            if state and state != "All":
+                cv_stmt = cv_stmt.where(ModelingData.state_id == state)
+            
+            lookup_conds = []
+            if brand and brand != "All":
+                lookup_conds.append(Lookup.brand == brand)
+            if channel and channel != "All":
+                lookup_conds.append(Lookup.channel == channel)
+            if lookup_conds:
+                cv_stmt = cv_stmt.where(
+                    select(1).select_from(Lookup).where(and_(
+                        Lookup.company_id == ModelingData.company_id,
+                        Lookup.item_id == ModelingData.item_id,
+                        *lookup_conds,
+                    )).exists()
+                )
+            cv_stmt = cv_stmt.group_by(ModelingData.item_id)
+        else:
+            cv_stmt = select(
+                Sales.item_id,
+                (func.stddev_samp(Sales.sales) / func.nullif(func.avg(Sales.sales), 0)).label("cv"),
+            ).where(Sales.company_id == self.company_id)
+            cv_stmt = self._sales_stmt_filters(cv_stmt, category, brand, state, store, channel)
+            cv_stmt = cv_stmt.group_by(Sales.item_id)
         cv_rows = [float(r.cv) for r in (await self.db.execute(cv_stmt)).all() if r.cv is not None]
 
         n_cv = len(cv_rows)
@@ -1057,4 +1139,4 @@ class DashboardService:
             },
         }
         await redis_service.set_json(key, result, settings.DASHBOARD_CACHE_TTL)
-        return result
+        return result, False
