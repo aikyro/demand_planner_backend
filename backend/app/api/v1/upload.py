@@ -752,7 +752,7 @@ async def delete_upload(
 
         elif source_type_lower == "actuals":
             from app.models import Actual
-            session_id = meta.get("session_id")
+            session_id = meta.get("session_id") or summary.get("session_id")
             if session_id:
                 # Count other completed actuals uploads for this session to avoid data loss
                 other_uploads_result = await db.execute(
@@ -765,9 +765,12 @@ async def delete_upload(
                 other_completed_count = 0
                 for other_up in other_uploads_result.scalars().all():
                     other_meta = getattr(other_up, "meta_info", None) or {}
+                    other_sum = getattr(other_up, "result_summary", None) or {}
+                    other_src = other_meta.get("source_type") or other_sum.get("source_type")
+                    other_sid = other_meta.get("session_id") or other_sum.get("session_id")
                     if (
-                        other_meta.get("source_type") == "actuals"
-                        and other_meta.get("session_id") == session_id
+                        other_src == "actuals"
+                        and other_sid == session_id
                     ):
                         other_completed_count += 1
 
@@ -799,6 +802,7 @@ async def delete_upload(
                 )
                 has_other_actuals_upload = any(
                     (getattr(up, "meta_info", None) or {}).get("source_type") == "actuals"
+                    or (getattr(up, "result_summary", None) or {}).get("source_type") == "actuals"
                     for up in other_company_uploads.scalars().all()
                 )
                 if has_other_actuals_upload:
@@ -814,21 +818,20 @@ async def delete_upload(
     await db.execute(delete(DataUpload).where(DataUpload.id == upload_id, DataUpload.company_id == user.company_id))
     await db.execute(delete(UploadProgress).where(UploadProgress.id == upload_id, UploadProgress.company_id == user.company_id))
     await db.execute(delete(UploadHistory).where(UploadHistory.id == upload_id, UploadHistory.company_id == user.company_id))
-    
+
     # 4. Clean up ghost tracking records for the cleared target tables
     if source_type:
         try:
             # Find all potential ghost records for this company
-            all_ghosts_query = select(UploadHistory.id, UploadHistory.meta_info, UploadHistory.result_summary, UploadHistory.file_name).where(
+            all_ghosts_query = select(UploadHistory.id, UploadHistory.result_summary, UploadHistory.file_name).where(
                 UploadHistory.company_id == user.company_id
             )
             all_ghosts_res = await db.execute(all_ghosts_query)
             
             ghost_ids_to_delete = []
-            for gid, gmeta, gsummary, gfile_name in all_ghosts_res.all():
-                gmeta = gmeta or {}
+            for gid, gsummary, gfile_name in all_ghosts_res.all():
                 gsummary = gsummary or {}
-                gsource_type = gmeta.get("source_type") or gsummary.get("source_type")
+                gsource_type = gsummary.get("source_type")
                 
                 # Try guessing from filename as fallback
                 if not gsource_type and gfile_name:
@@ -841,7 +844,7 @@ async def delete_upload(
                 
                 if gsource_type and gsource_type.lower() == source_type_lower:
                     if source_type_lower == "actuals":
-                        gsession_id = gmeta.get("session_id") or gsummary.get("session_id")
+                        gsession_id = gsummary.get("session_id")
                         if not session_id or gsession_id == session_id:
                             ghost_ids_to_delete.append(gid)
                     else:
@@ -857,3 +860,4 @@ async def delete_upload(
 
     await db.commit()
     logger.info(f"Successfully deleted upload_id={upload_id} and cleared its target data.")
+

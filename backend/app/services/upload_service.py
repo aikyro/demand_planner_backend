@@ -422,7 +422,7 @@ class UploadService:
         except Exception as e:
             logger.error(f"Error processing upload {upload_id}: {str(e)}")
             upload.status = UploadStatus.FAILED.value
-            upload.error_message = str(e)
+            upload.error_message = str(e)[:2000]
             upload.progress_percentage = 0
             await self.db.commit()
 
@@ -958,7 +958,7 @@ class UploadService:
                 upload_to_fail = result.scalar_one_or_none()
                 if upload_to_fail and upload_to_fail.status not in [UploadStatus.COMPLETED.value, UploadStatus.FAILED.value, UploadStatus.CANCELLED.value]:
                     upload_to_fail.status = UploadStatus.FAILED.value
-                    upload_to_fail.error_message = str(e)
+                    upload_to_fail.error_message = str(e)[:2000]
                     upload_to_fail.progress_percentage = 0
                     upload_to_fail.completed_at = datetime.now(timezone.utc)
                     upload_to_fail.updated_at = datetime.now(timezone.utc)
