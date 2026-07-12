@@ -44,7 +44,7 @@ async def _run_upload_processing(
                 upload = result.scalar_one_or_none()
                 if upload and upload.status not in [UploadStatus.COMPLETED.value, UploadStatus.FAILED.value, UploadStatus.CANCELLED.value]:
                     upload.status = UploadStatus.FAILED.value
-                    upload.error_message = f"Background processing error: {str(e)}"
+                    upload.error_message = f"Background processing error: {str(e)}"[:2000]
                     upload.completed_at = datetime.now(timezone.utc)
                     upload.updated_at = datetime.now(timezone.utc)
                     await db.commit()
@@ -120,7 +120,7 @@ async def _run_import_processing(
                 upload = result.scalar_one_or_none()
                 if upload and upload.status not in ["completed", "failed", "cancelled"]:
                     upload.status = "failed"
-                    upload.error_message = f"Import failed: {str(e)}"
+                    upload.error_message = f"Import failed: {str(e)}"[:2000]
                     upload.completed_at = datetime.now(timezone.utc)
                     upload.updated_at = datetime.now(timezone.utc)
                     await db.commit()

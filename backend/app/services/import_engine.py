@@ -198,30 +198,31 @@ class ImportEngine:
                         })
 
                     if batch:
-                        # Idempotent UPSERT: if a row with the same (company_id, d)
-                        # survives the DELETE above (e.g. a stale row from a
-                        # previous import or a concurrent writer), update it
-                        # instead of erroring out on the unique constraint.
-                        stmt = pg_insert(Calendar).values(batch)
-                        stmt = stmt.on_conflict_do_update(
-                            index_elements=["company_id", "d"],
-                            set_={
-                                "date": stmt.excluded.date,
-                                "wm_yr_wk": stmt.excluded.wm_yr_wk,
-                                "weekday": stmt.excluded.weekday,
-                                "wday": stmt.excluded.wday,
-                                "month": stmt.excluded.month,
-                                "year": stmt.excluded.year,
-                                "event_name_1": stmt.excluded.event_name_1,
-                                "event_type_1": stmt.excluded.event_type_1,
-                                "event_name_2": stmt.excluded.event_name_2,
-                                "event_type_2": stmt.excluded.event_type_2,
-                                "snap_CA": stmt.excluded.snap_CA,
-                                "snap_TX": stmt.excluded.snap_TX,
-                                "snap_WI": stmt.excluded.snap_WI,
-                            },
-                        )
-                        await self.db.execute(stmt)
+                        # Chunk the batch to avoid asyncpg's 32767 parameter limit (17 parameters per row)
+                        # 32767 // 17 = 1927 rows max. We use 1000 to be safe.
+                        sub_batch_size = 1000
+                        for i in range(0, len(batch), sub_batch_size):
+                            sub_batch = batch[i:i + sub_batch_size]
+                            stmt = pg_insert(Calendar).values(sub_batch)
+                            stmt = stmt.on_conflict_do_update(
+                                index_elements=["company_id", "d"],
+                                set_={
+                                    "date": stmt.excluded.date,
+                                    "wm_yr_wk": stmt.excluded.wm_yr_wk,
+                                    "weekday": stmt.excluded.weekday,
+                                    "wday": stmt.excluded.wday,
+                                    "month": stmt.excluded.month,
+                                    "year": stmt.excluded.year,
+                                    "event_name_1": stmt.excluded.event_name_1,
+                                    "event_type_1": stmt.excluded.event_type_1,
+                                    "event_name_2": stmt.excluded.event_name_2,
+                                    "event_type_2": stmt.excluded.event_type_2,
+                                    "snap_CA": stmt.excluded.snap_CA,
+                                    "snap_TX": stmt.excluded.snap_TX,
+                                    "snap_WI": stmt.excluded.snap_WI,
+                                },
+                            )
+                            await self.db.execute(stmt)
                     total_imported += len(batch)
                     
                     # Increment progress ratio
@@ -273,42 +274,76 @@ class ImportEngine:
                 # Clean sales table first
                 logger.info(f"Replacing Sales records for company {self.company_id}")
                 await self.db.execute(delete(Sales).where(Sales.company_id == self.company_id))
+                await self.db.commit()
+
+                # Get the underlying asyncpg connection for binary COPY
+                conn = await self.db.connection()
+                raw_conn = await conn.get_raw_connection()
+                driver_conn = raw_conn.dbapi_connection._connection
+
+                columns = [
+                    "id", "company_id", "created_at", "item_id", 
+                    "dept_id", "cat_id", "store_id", "state_id", "d", "sales", "item_store_id"
+                ]
+
+                # Pre-calculate inverted mapping lookup to optimize Python loop speed
+                col_to_user_col = {}
+                for col in SALES_COLUMNS:
+                    user_col = inverted_mapping.get(col)
+                    if user_col:
+                        col_to_user_col[col] = user_col
 
                 for chunk in self.file_parser.stream_file(staged_file_path, FileType(file_type)):
-                    batch = []
+                    batch_tuples = []
+                    now = datetime.now(timezone.utc)
                     for row in chunk.data:
-                        entry = {}
-                        for col in SALES_COLUMNS:
-                            user_col = inverted_mapping.get(col)
-                            if user_col and user_col in row:
-                                entry[col] = row[user_col]
+                        item_id = safe_str(row.get(col_to_user_col.get("item_id")))
+                        dept_id = safe_str(row.get(col_to_user_col.get("dept_id")))
+                        cat_id = safe_str(row.get(col_to_user_col.get("cat_id")))
+                        store_id = safe_str(row.get(col_to_user_col.get("store_id")))
+                        state_id = safe_str(row.get(col_to_user_col.get("state_id")))
+                        d = safe_str(row.get(col_to_user_col.get("d")))
+                        sales_val = safe_int(row.get(col_to_user_col.get("sales")))
+                        item_store_id = safe_str(row.get(col_to_user_col.get("item_store_id")))
 
-                        batch.append({
-                            "id": str(uuid.uuid4()),
-                            "company_id": self.company_id,
-                            "created_at": datetime.now(timezone.utc),
-                            "updated_at": datetime.now(timezone.utc),
-                            "item_id": safe_str(entry.get("item_id")),
-                            "dept_id": safe_str(entry.get("dept_id")),
-                            "cat_id": safe_str(entry.get("cat_id")),
-                            "store_id": safe_str(entry.get("store_id")),
-                            "state_id": safe_str(entry.get("state_id")),
-                            "d": safe_str(entry.get("d")),
-                            "sales": safe_int(entry.get("sales")),
-                            "item_store_id": safe_str(entry.get("item_store_id"))
-                        })
+                        batch_tuples.append((
+                            str(uuid.uuid4()),
+                            self.company_id,
+                            now,
+                            item_id,
+                            dept_id,
+                            cat_id,
+                            store_id,
+                            state_id,
+                            d,
+                            sales_val,
+                            item_store_id
+                        ))
 
-                    if batch:
-                        await self.db.execute(insert(Sales), batch)
-                    total_imported += len(batch)
+                    if batch_tuples:
+                        await driver_conn.copy_records_to_table(
+                            "sales",
+                            records=batch_tuples,
+                            columns=columns
+                        )
+                    total_imported += len(batch_tuples)
                     
                     # Increment progress ratio
                     progress_fraction = chunk.chunk_index / chunk.total_chunks
                     progress_val = int(91 + progress_fraction * 8)
-                    upload.progress_percentage = min(progress_val, 99)
-                    upload.processed_rows = total_imported
-                    await self.db.flush()
-                    await self.db.commit()
+                    
+                    # Update progress directly in DB to bypass SQLAlchemy overhead
+                    await driver_conn.execute(
+                        """
+                        UPDATE upload_progress 
+                        SET progress_percentage = $1, processed_rows = $2, updated_at = $3
+                        WHERE id = $4;
+                        """,
+                        min(progress_val, 99),
+                        total_imported,
+                        now,
+                        upload_id
+                    )
 
             elif source_type == "lookup":
                 # For lookup data: accumulate and replace lookup values
@@ -501,7 +536,7 @@ class ImportEngine:
                 upload_fail = result.scalar_one_or_none()
                 if upload_fail:
                     upload_fail.status = "failed"
-                    upload_fail.error_message = f"Import error: {str(e)}"
+                    upload_fail.error_message = f"Import error: {str(e)}"[:2000]
                     upload_fail.completed_at = datetime.now(timezone.utc)
                     upload_fail.updated_at = datetime.now(timezone.utc)
                     await self.db.commit()
